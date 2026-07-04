@@ -1,0 +1,34 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chat-mother-forker"
+description = "Stdio MCP server for searching, checkpointing, and forking coding-agent chat history across tools."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = [
+    "mcp>=1.2.0",
+]
+
+[project.scripts]
+chat-mother-forker = "chat_mother_forker.server:main"
+
+# Version lives in exactly one place: src/chat_mother_forker/__init__.py (__version__).
+# Hatchling reads it from there for both `uv build` and PyPI publishing, so nothing
+# else (like this file) needs to be touched to bump the version.
+[tool.hatch.version]
+path = "src/chat_mother_forker/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chat_mother_forker"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
