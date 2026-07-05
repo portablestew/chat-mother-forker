@@ -19,7 +19,7 @@ class Role(str, Enum):
     Turn grouping only cares about USER vs. everything else. The other values
     exist so rendering can label things distinctly (e.g. "TOOL_CALL: grep")
     and so checkpoint scraping can look specifically at TOOL_RESULT text,
-    where the checkpoint tool's literal output lives.
+    where the chat_checkpoint tool's literal output lives.
     """
 
     USER = "user"

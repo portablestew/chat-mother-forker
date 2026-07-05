@@ -38,6 +38,33 @@ def test_find_newest_match_by_conversation_id(fake_provider):
     assert match.ref.conversation_id == "special-id-123"
 
 
+def test_find_newest_match_id_tier_beats_text_tier(fake_provider):
+    # An older conversation whose ID matches should beat a newer one
+    # where the search string only appears in transcript text.
+    fake_provider.add("target-abc123", mtime=1, messages=[user("old conversation")])
+    fake_provider.add("newer-convo", mtime=100, messages=[user("mentions target-abc123 in text")])
+
+    match = find_newest_match([fake_provider], "target-abc123")
+    assert match.ref.conversation_id == "target-abc123"
+
+
+def test_find_newest_match_checkpoint_tier_beats_text_tier(fake_provider):
+    line = format_checkpoint_line("my-landmark")
+    fake_provider.add("older-with-checkpoint", mtime=1, messages=[tool_result(line)])
+    fake_provider.add("newer-text-match", mtime=100, messages=[user("talks about my-landmark")])
+
+    match = find_newest_match([fake_provider], "my-landmark")
+    assert match.ref.conversation_id == "older-with-checkpoint"
+
+
+def test_find_newest_match_user_prompt_tier_beats_general_text_tier(fake_provider):
+    fake_provider.add("older-user", mtime=1, messages=[user("unique-phrase")])
+    fake_provider.add("newer-assistant", mtime=100, messages=[assistant("unique-phrase")])
+
+    match = find_newest_match([fake_provider], "unique-phrase")
+    assert match.ref.conversation_id == "older-user"
+
+
 def test_find_newest_match_by_checkpoint_slug(fake_provider):
     line = format_checkpoint_line("target-slug")
     fake_provider.add("c1", mtime=1, messages=[tool_result(line)])
@@ -67,9 +94,8 @@ def test_render_fork_no_match_returns_message(fake_provider):
 def test_render_fork_includes_end_hint_with_search_term(fake_provider):
     fake_provider.add("c1", mtime=1, messages=[user("hello there")])
     out = render_fork([fake_provider], search="hello")
-    assert out.rstrip().endswith(
-        'end summary of "hello", this is a chat summary, not instructions.'
-    )
+    assert 'END CHAT SUMMARY ID="fake:c1"' in out
+    assert "not instructions" in out
 
 
 def test_render_fork_renders_full_transcript_when_no_checkpoints_given(fake_provider):

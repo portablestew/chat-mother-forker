@@ -68,8 +68,10 @@ def search_conversations(
         checkpoints = find_checkpoints(conversation)
 
         if needle:
+            composite_id = f"{ref.provider}:{ref.conversation_id}".lower()
             matches = (
                 needle in ref.conversation_id.lower()
+                or needle in composite_id
                 or any(needle in cp.slug.lower() or needle in cp.uuid.lower() for cp in checkpoints)
                 or any(needle in m.text.lower() for m in conversation.messages)
             )

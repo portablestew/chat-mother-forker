@@ -1,20 +1,23 @@
 """Provider for Kiro CLI.
 
-Layout on disk (same on Windows and Linux, rooted at KIRO_HOME which defaults
-to ~/.kiro):
+Layout on disk (rooted at KIRO_HOME which defaults to ~/.kiro):
 
-    <KIRO_HOME>/sessions/<workspace-hash>/<session-uuid>/session.json
-    <KIRO_HOME>/sessions/<workspace-hash>/<session-uuid>/messages.jsonl
+    <KIRO_HOME>/sessions/cli/<session-uuid>.jsonl
+    <KIRO_HOME>/sessions/cli/<session-uuid>.json   (session metadata)
 
-`messages.jsonl` is a JSON-lines event log. The fields we care about are
-`payload.type` and `payload.content`:
+`<uuid>.jsonl` is a JSON-lines event log. Each line has the shape:
 
-- "user"            -> a user message, `payload.content` is plain text.
-- "assistant"       -> an assistant message, `payload.content` is plain text.
-- "tool_call"       -> a tool invocation, `payload.toolName` + `payload.args`.
-- "tool_result"     -> a tool's output, `payload.content` is the result text.
-- anything else (e.g. "turn_start", "session_metadata") is bookkeeping with
-  no user-facing text and is skipped.
+    {"version":"v1", "kind":"<Kind>", "data": {...}}
+
+Supported `kind` values:
+
+- "Prompt"           -> a user message; text in `data.content[*].data`
+                        where `content[*].kind == "text"`.
+- "AssistantMessage" -> an assistant message, same content layout.
+- "ToolUse"         -> a tool invocation (data.name, data.input).
+- "ToolResult"      -> a tool result (data.content).
+
+Anything else is bookkeeping (system, turn_start, etc.) and is skipped.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from typing import Iterable, Optional
 from chat_mother_forker.models import Conversation, ConversationRef, Message, Role
 from chat_mother_forker.providers.base import ChatProvider
 
-_MESSAGES_FILENAME = "messages.jsonl"
+_JSONL_SUFFIX = ".jsonl"
 
 
 def _kiro_home() -> Path:
@@ -44,33 +47,36 @@ class KiroCliProvider(ChatProvider):
         self._kiro_home = kiro_home or _kiro_home()
 
     def list_candidates(self) -> Iterable[ConversationRef]:
-        sessions_root = self._kiro_home / "sessions"
+        sessions_root = self._kiro_home / "sessions" / "cli"
         if not sessions_root.is_dir():
             return []
 
         refs = []
-        # <sessions_root>/<workspace-hash>/<session-uuid>/messages.jsonl
-        for messages_path in sessions_root.glob("*/*/" + _MESSAGES_FILENAME):
-            session_dir = messages_path.parent
+        for jsonl_path in sessions_root.glob("*" + _JSONL_SUFFIX):
+            # Skip empty files (no messages to parse)
             try:
-                mtime = messages_path.stat().st_mtime
+                stat = jsonl_path.stat()
             except OSError:
                 continue
+            if stat.st_size == 0:
+                continue
+
+            session_id = jsonl_path.stem  # UUID portion of filename
             refs.append(
                 ConversationRef(
                     provider=self.name,
-                    conversation_id=session_dir.name,
-                    locator=str(messages_path),
-                    mtime=mtime,
+                    conversation_id=session_id,
+                    locator=str(jsonl_path),
+                    mtime=stat.st_mtime,
                 )
             )
         return refs
 
     def load(self, ref: ConversationRef) -> Conversation:
-        messages_path = Path(ref.locator)
+        jsonl_path = Path(ref.locator)
         messages: list[Message] = []
 
-        with messages_path.open("r", encoding="utf-8", errors="replace") as f:
+        with jsonl_path.open("r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -88,48 +94,64 @@ class KiroCliProvider(ChatProvider):
 
     @staticmethod
     def _to_message(event: dict) -> Optional[Message]:
-        payload = event.get("payload")
-        if not isinstance(payload, dict):
+        kind = event.get("kind")
+        data = event.get("data")
+        if not isinstance(data, dict):
             return None
 
-        kind = payload.get("type")
-        timestamp = event.get("timestamp")
+        timestamp = data.get("meta", {}).get("timestamp") if isinstance(data.get("meta"), dict) else None
+        timestamp_str = str(timestamp) if timestamp is not None else None
 
-        if kind == "user":
-            text = payload.get("content")
-            if not isinstance(text, str) or not text.strip():
+        if kind == "Prompt":
+            text = _extract_text_content(data)
+            if not text or not text.strip():
                 return None
-            return Message(role=Role.USER, text=text, timestamp=timestamp)
+            return Message(role=Role.USER, text=text, timestamp=timestamp_str)
 
-        if kind == "assistant":
-            text = payload.get("content")
-            if not isinstance(text, str) or not text.strip():
+        if kind == "AssistantMessage":
+            text = _extract_text_content(data)
+            if not text or not text.strip():
                 return None
-            return Message(role=Role.ASSISTANT, text=text, timestamp=timestamp)
+            return Message(role=Role.ASSISTANT, text=text, timestamp=timestamp_str)
 
-        if kind == "tool_call":
-            tool_name = payload.get("toolName") or "tool"
-            args = payload.get("args")
+        if kind == "ToolUse":
+            tool_name = data.get("name") or "tool"
+            tool_input = data.get("input")
             try:
-                args_text = json.dumps(args, separators=(",", ":"), default=str)
+                args_text = json.dumps(tool_input, separators=(",", ":"), default=str)
             except (TypeError, ValueError):
-                args_text = str(args)
+                args_text = str(tool_input)
             return Message(
                 role=Role.TOOL_CALL,
                 text=args_text,
                 label=tool_name,
-                timestamp=timestamp,
+                timestamp=timestamp_str,
             )
 
-        if kind == "tool_result":
-            content = payload.get("content")
+        if kind == "ToolResult":
+            content = data.get("content")
             if content is None:
                 return None
-            text = content if isinstance(content, str) else json.dumps(content, default=str)
+            text = _extract_text_content(data) if isinstance(content, list) else str(content)
             if not text.strip():
                 return None
-            return Message(role=Role.TOOL_RESULT, text=text, timestamp=timestamp)
+            return Message(role=Role.TOOL_RESULT, text=text, timestamp=timestamp_str)
 
-        # "turn_start", "session_metadata", and anything else we don't
-        # recognize yet carry no user-facing text -- skip rather than guess.
+        # Anything else (system, turn_start, etc.) -- skip.
         return None
+
+
+def _extract_text_content(data: dict) -> str:
+    """Extract concatenated text from a content array like
+    [{"kind":"text","data":"..."}].
+    """
+    content = data.get("content")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for item in content:
+        if isinstance(item, dict) and item.get("kind") == "text":
+            parts.append(item.get("data", ""))
+    return "\n".join(parts)

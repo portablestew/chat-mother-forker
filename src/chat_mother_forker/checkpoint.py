@@ -1,11 +1,11 @@
 """Checkpoint format and extraction.
 
-The `checkpoint` tool's entire job is to emit one line of the form:
+The `chat_checkpoint` tool's entire job is to emit one line of the form:
 
     CHAT CHECKPOINT UUID=<uuid> SLUG=<slug>
 
 That line only reliably survives verbatim inside a TOOL_RESULT message (the
-raw output of the checkpoint tool call) -- an assistant relaying it to the
+raw output of the chat_checkpoint tool call) -- an assistant relaying it to the
 user in prose might paraphrase or reformat it. So extraction only looks at
 TOOL_RESULT messages, which keeps the regex simple and avoids false
 positives from an assistant merely *talking about* checkpoints.
@@ -34,7 +34,7 @@ class Checkpoint:
 
 
 def format_checkpoint_line(slug: str) -> str:
-    """Build the literal line the `checkpoint` tool returns. `slug` is
+    """Build the literal line the `chat_checkpoint` tool returns. `slug` is
     truncated to MAX_SLUG_CHARS if needed -- checkpoints are meant to be
     short labels, not content.
     """

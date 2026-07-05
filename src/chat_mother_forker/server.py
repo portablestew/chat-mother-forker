@@ -1,4 +1,4 @@
-"""Stdio MCP server exposing chat_search, checkpoint, and chat_fork."""
+"""Stdio MCP server exposing chat_search, chat_checkpoint, and chat_fork."""
 
 from __future__ import annotations
 
@@ -30,11 +30,9 @@ def chat_search(search: Optional[str] = None) -> str:
 
 
 @mcp.tool()
-def checkpoint(slug: str) -> str:
+def chat_checkpoint(slug: str) -> str:
     """Create a checkpoint in the current conversation so it can be found and
-    sliced later via chat_search/chat_fork. Relay this tool's exact output
-    into the conversation (don't paraphrase it) -- chat_search only recognizes
-    the literal "CHAT CHECKPOINT UUID=... SLUG=..." line.
+    sliced later via chat_search/chat_fork.
 
     `slug` is a short label (up to 256 characters); it does not need to be
     unique.
