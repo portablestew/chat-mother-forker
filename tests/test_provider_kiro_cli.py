@@ -233,3 +233,192 @@ def test_load_preserves_timestamp_from_meta(tmp_path):
     conversation = provider.load(ref)
 
     assert conversation.messages[0].timestamp == "1780083415"
+
+
+# --- Tests for the real Kiro CLI v1 format (ToolResults plural, embedded toolUse) ---
+
+
+def _tool_results(results):
+    """Create a ToolResults (plural) event in the real Kiro CLI v1 format.
+
+    `results` is a list of (toolUseId, text) tuples representing MCP text responses.
+    """
+    content = []
+    for tool_use_id, text in results:
+        content.append({
+            "kind": "toolResult",
+            "data": {
+                "toolUseId": tool_use_id,
+                "content": [
+                    {
+                        "kind": "json",
+                        "data": {
+                            "content": [{"type": "text", "text": text}],
+                            "structuredContent": {"result": text},
+                            "isError": False,
+                        },
+                    }
+                ],
+            },
+        })
+    return {"version": "v1", "kind": "ToolResults", "data": {"content": content}}
+
+
+def _assistant_with_tool_use(text, tool_name, tool_input, tool_use_id="tooluse_abc123"):
+    """Create an AssistantMessage with both text and an embedded toolUse."""
+    content = []
+    if text:
+        content.append({"kind": "text", "data": text})
+    content.append({
+        "kind": "toolUse",
+        "data": {
+            "toolUseId": tool_use_id,
+            "name": tool_name,
+            "input": tool_input,
+        },
+    })
+    return {"version": "v1", "kind": "AssistantMessage", "data": {"content": content}}
+
+
+def _assistant_tool_use_only(tool_name, tool_input, tool_use_id="tooluse_abc123"):
+    """Create an AssistantMessage with only a toolUse (empty text preceding it)."""
+    return {
+        "version": "v1",
+        "kind": "AssistantMessage",
+        "data": {
+            "content": [
+                {"kind": "text", "data": ""},
+                {"kind": "toolUse", "data": {"toolUseId": tool_use_id, "name": tool_name, "input": tool_input}},
+            ]
+        },
+    }
+
+
+def test_load_parses_tool_results_plural(tmp_path):
+    """ToolResults (plural) events should produce TOOL_RESULT messages."""
+    _write_session(
+        tmp_path,
+        "session-1",
+        [
+            _prompt("hello"),
+            _assistant_with_tool_use("Let me search", "chat_search", {}, "tooluse_1"),
+            _tool_results([("tooluse_1", "3 conversations found")]),
+        ],
+    )
+    provider = KiroCliProvider(kiro_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+    conversation = provider.load(ref)
+
+    roles = [m.role for m in conversation.messages]
+    assert Role.TOOL_RESULT in roles
+    tool_result_msg = [m for m in conversation.messages if m.role == Role.TOOL_RESULT][0]
+    assert tool_result_msg.text == "3 conversations found"
+
+
+def test_load_parses_embedded_tool_use_in_assistant_message(tmp_path):
+    """toolUse items inside AssistantMessage should produce TOOL_CALL messages."""
+    _write_session(
+        tmp_path,
+        "session-1",
+        [_assistant_with_tool_use("Let me check that", "grep_search", {"query": "foo"})],
+    )
+    provider = KiroCliProvider(kiro_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+    conversation = provider.load(ref)
+
+    roles = [m.role for m in conversation.messages]
+    assert roles == [Role.ASSISTANT, Role.TOOL_CALL]
+    assert conversation.messages[0].text == "Let me check that"
+    assert conversation.messages[1].label == "grep_search"
+    assert json.loads(conversation.messages[1].text) == {"query": "foo"}
+
+
+def test_load_parses_tool_use_only_assistant_message(tmp_path):
+    """An AssistantMessage with only empty text + toolUse should produce just TOOL_CALL."""
+    _write_session(
+        tmp_path,
+        "session-1",
+        [_assistant_tool_use_only("chat_fork", {"search": "abc123"})],
+    )
+    provider = KiroCliProvider(kiro_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+    conversation = provider.load(ref)
+
+    assert len(conversation.messages) == 1
+    assert conversation.messages[0].role == Role.TOOL_CALL
+    assert conversation.messages[0].label == "chat_fork"
+
+
+def test_load_parses_multiple_tool_results_in_one_event(tmp_path):
+    """A single ToolResults event can contain multiple toolResult items."""
+    _write_session(
+        tmp_path,
+        "session-1",
+        [_tool_results([("id_1", "result one"), ("id_2", "result two")])],
+    )
+    provider = KiroCliProvider(kiro_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+    conversation = provider.load(ref)
+
+    assert len(conversation.messages) == 2
+    assert all(m.role == Role.TOOL_RESULT for m in conversation.messages)
+    assert conversation.messages[0].text == "result one"
+    assert conversation.messages[1].text == "result two"
+
+
+def test_load_full_round_trip_real_format(tmp_path):
+    """A realistic conversation: prompt, assistant+tool_use, tool_result, assistant."""
+    _write_session(
+        tmp_path,
+        "session-1",
+        [
+            _prompt("What's in the project?"),
+            _assistant_with_tool_use("Let me look at the files.", "read_file", {"path": "README.md"}, "tooluse_x"),
+            _tool_results([("tooluse_x", "# My Project\nA cool project.")]),
+            _assistant("This project is called 'My Project'. It's a cool project."),
+        ],
+    )
+    provider = KiroCliProvider(kiro_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+    conversation = provider.load(ref)
+
+    roles = [m.role for m in conversation.messages]
+    assert roles == [Role.USER, Role.ASSISTANT, Role.TOOL_CALL, Role.TOOL_RESULT, Role.ASSISTANT]
+    assert conversation.messages[0].text == "What's in the project?"
+    assert conversation.messages[1].text == "Let me look at the files."
+    assert conversation.messages[2].label == "read_file"
+    assert "My Project" in conversation.messages[3].text
+    assert "cool project" in conversation.messages[4].text
+
+
+def test_checkpoint_discovery_through_kiro_cli_provider(tmp_path):
+    """A checkpoint tool result stored in the real format should be discovered
+    by find_checkpoints() when the conversation is loaded."""
+    from chat_mother_forker.checkpoint import find_checkpoints
+
+    checkpoint_text = "CHAT CHECKPOINT UUID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee SLUG=test-slug"
+
+    _write_session(
+        tmp_path,
+        "session-1",
+        [
+            _prompt("Place a checkpoint"),
+            _assistant_with_tool_use(
+                "I'll create a checkpoint for you.",
+                "chat_checkpoint",
+                {"slug": "test-slug"},
+                "tooluse_cp",
+            ),
+            _tool_results([("tooluse_cp", checkpoint_text)]),
+            _assistant("Checkpoint set: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee / test-slug"),
+        ],
+    )
+
+    provider = KiroCliProvider(kiro_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+    conversation = provider.load(ref)
+
+    checkpoints = find_checkpoints(conversation)
+    assert len(checkpoints) == 1
+    assert checkpoints[0].slug == "test-slug"
+    assert checkpoints[0].uuid == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
