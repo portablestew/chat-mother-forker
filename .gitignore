@@ -9,3 +9,5 @@ build/
 .ruff_cache/
 .pyddock/
 .kiro/
+.mcp.json
+.claude/settings.local.json

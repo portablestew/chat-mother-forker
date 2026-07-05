@@ -42,6 +42,35 @@ from chat_mother_forker.providers.base import ChatProvider
 _JSONL_SUFFIX = ".jsonl"
 
 
+def _unwrap_structured_result(text: str) -> str:
+    """Normalize FastMCP's structured-content wrapper on MCP tool results.
+
+    Unlike other clients (e.g. Kiro), Claude Code stores the *structured
+    content* an MCP tool returns -- a single-key ``{"result": <value>}``
+    object that FastMCP synthesizes for a scalar return -- as the literal
+    text of the ``tool_result`` block. Left as-is, tool output reads as
+    ``{"result":"..."}`` instead of the bare string every other provider
+    yields. That prefix also breaks checkpoint discovery: ``find_checkpoints``
+    anchors the ``CHAT CHECKPOINT ...`` line at position 0 of the message
+    text, and ``{"result":"`` shifts it off the start.
+
+    So when the text is exactly such a wrapper, unwrap it to the inner value.
+    Anything else (plain text, multi-key JSON, malformed JSON) is returned
+    untouched.
+    """
+    stripped = text.lstrip()
+    if not stripped.startswith('{"result"') and not stripped.startswith('{ "result"'):
+        return text
+    try:
+        obj = json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        return text
+    if isinstance(obj, dict) and set(obj.keys()) == {"result"}:
+        inner = obj["result"]
+        return inner if isinstance(inner, str) else json.dumps(inner, default=str)
+    return text
+
+
 def _trim_before_first_user(messages: list[Message]) -> list[Message]:
     """Drop any messages before the first user message."""
     for i, m in enumerate(messages):
@@ -180,6 +209,7 @@ class ClaudeCodeProvider(ChatProvider):
                     text = "\n".join(text_parts)
                 else:
                     text = json.dumps(result_content, default=str)
+                text = _unwrap_structured_result(text)
                 if text.strip():
                     results.append(
                         Message(role=Role.TOOL_RESULT, text=text, timestamp=timestamp)
