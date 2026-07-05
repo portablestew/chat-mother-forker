@@ -6,7 +6,14 @@ Matching uses tiered priority (highest tier wins regardless of recency):
 1. Conversation ID match (bare id or provider:id composite)
 2. Checkpoint slug/uuid match
 3. User prompt text match
-4. General transcript match (assistant text, tool results, etc.)
+4. Assistant text match
+
+Tool call/result text is never searched (tiers 2's checkpoint scraping
+looks at TOOL_RESULT text specifically for the checkpoint line format, but
+general substring search does not) -- it's noisy, and a nested chat_fork
+transcript only ever lives inside a TOOL_RESULT, so excluding tool
+messages from general search also keeps someone else's quoted
+conversation from polluting results.
 
 Within each tier, the newest conversation wins.
 """
@@ -52,9 +59,11 @@ def _match_tier(
         if m.role is Role.USER and needle in m.text.lower():
             return _MatchTier.USER_PROMPT
 
-    # Tier 4: anything else in the transcript
+    # Tier 4: assistant text (tool calls/results are excluded -- too noisy,
+    # and it keeps a chat_fork transcript nested inside a TOOL_RESULT from
+    # ever polluting search results with someone else's conversation)
     for m in conversation.messages:
-        if m.role is not Role.USER and needle in m.text.lower():
+        if m.role is Role.ASSISTANT and needle in m.text.lower():
             return _MatchTier.GENERAL_TEXT
 
     return _MatchTier.NO_MATCH

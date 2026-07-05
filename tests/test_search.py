@@ -4,7 +4,7 @@ from chat_mother_forker.search import (
     render_search_results,
     search_conversations,
 )
-from conftest import FakeProvider, assistant, tool_result, user
+from conftest import FakeProvider, assistant, tool_call, tool_result, user
 
 
 def test_gather_sorted_candidates_merges_multiple_providers_by_recency():
@@ -110,6 +110,20 @@ def test_search_conversations_reports_all_checkpoints_regardless_of_search_term(
 def test_search_conversations_no_match_returns_empty_list(fake_provider):
     fake_provider.add("c1", mtime=1, messages=[user("hello")])
     results = search_conversations([fake_provider], search="nonexistent-xyz")
+    assert results == []
+
+
+def test_search_conversations_ignores_tool_call_and_result_text(fake_provider):
+    fake_provider.add(
+        "c1",
+        mtime=1,
+        messages=[
+            user("hello"),
+            tool_call("grep", text='{"query":"unique-tool-phrase"}'),
+            tool_result("output containing unique-tool-phrase"),
+        ],
+    )
+    results = search_conversations([fake_provider], search="unique-tool-phrase")
     assert results == []
 
 

@@ -206,6 +206,11 @@ providers don't yet have dedicated file-based tests (see
 - `kiro_ide`'s discovery/content source (execution logs) is an internal
   Kiro IDE storage detail rather than a documented format, so it's more
   likely to break across Kiro IDE versions than the other two providers.
+- `kiro_ide`'s `chatSessionId` can rotate (e.g. around an IDE or MCP
+  restart), which starts a new session with an empty `context.messages`
+  and no prior terminal executions to fall back on. There's currently no
+  stitching across that rotation — it looks like a brand-new conversation
+  to this tool.
 
 ### Versioning
 

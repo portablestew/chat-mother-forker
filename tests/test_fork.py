@@ -5,7 +5,7 @@ from chat_mother_forker.fork import (
     slice_between_checkpoints,
 )
 from chat_mother_forker.models import Conversation, ConversationRef
-from conftest import FakeProvider, assistant, tool_result, user
+from conftest import FakeProvider, assistant, tool_call, tool_result, user
 
 
 def _ref():
@@ -83,6 +83,23 @@ def test_find_newest_match_by_checkpoint_uuid(fake_provider):
 def test_find_newest_match_no_match_returns_none(fake_provider):
     fake_provider.add("c1", mtime=1, messages=[user("hello")])
     assert find_newest_match([fake_provider], "nonexistent-xyz") is None
+
+
+def test_find_newest_match_ignores_tool_call_and_result_text(fake_provider):
+    # General text search (tier 4) only considers assistant text -- tool
+    # call/result content is excluded, both as noise reduction and to keep
+    # a nested chat_fork transcript (which only ever lives inside a
+    # TOOL_RESULT) from matching on someone else's conversation content.
+    fake_provider.add(
+        "c1",
+        mtime=1,
+        messages=[
+            user("hello"),
+            tool_call("grep", text='{"query":"unique-tool-phrase"}'),
+            tool_result("output containing unique-tool-phrase"),
+        ],
+    )
+    assert find_newest_match([fake_provider], "unique-tool-phrase") is None
 
 
 def test_render_fork_no_match_returns_message(fake_provider):

@@ -1,6 +1,11 @@
 """chat_search: list recent conversations across all providers, optionally
 filtered by a substring.
 
+The substring filter matches against conversation id, checkpoint
+slug/uuid, and user/assistant message text -- tool call/result text is
+excluded (noisy, and it keeps a nested chat_fork transcript inside a
+TOOL_RESULT from polluting matches with someone else's conversation).
+
 Performance strategy (per design): each provider's cheap `list_candidates()`
 is sorted by recency and capped to `CANDIDATES_PER_PROVIDER` *before* any
 full parsing happens. Only those capped-and-merged candidates get loaded to
@@ -17,11 +22,12 @@ from datetime import datetime, timezone
 from typing import Optional, Sequence
 
 from chat_mother_forker.checkpoint import Checkpoint, find_checkpoints
-from chat_mother_forker.models import ConversationRef
+from chat_mother_forker.models import ConversationRef, Role
 from chat_mother_forker.providers.base import ChatProvider
-from chat_mother_forker.truncate import MAX_PREVIEW_CHARS, MAX_TURNS, truncate_preview
+from chat_mother_forker.truncate import MAX_PREVIEW_CHARS, truncate_preview
 
 CANDIDATES_PER_PROVIDER = 100
+MAX_SEARCH_RESULTS = 50
 
 
 @dataclass
@@ -53,7 +59,7 @@ def gather_sorted_candidates(
 def search_conversations(
     providers: Sequence[ChatProvider],
     search: Optional[str] = None,
-    max_results: int = MAX_TURNS,
+    max_results: int = MAX_SEARCH_RESULTS,
     candidates_per_provider: int = CANDIDATES_PER_PROVIDER,
 ) -> list[SearchResult]:
     by_name = {p.name: p for p in providers}
@@ -73,7 +79,11 @@ def search_conversations(
                 needle in ref.conversation_id.lower()
                 or needle in composite_id
                 or any(needle in cp.slug.lower() or needle in cp.uuid.lower() for cp in checkpoints)
-                or any(needle in m.text.lower() for m in conversation.messages)
+                or any(
+                    needle in m.text.lower()
+                    for m in conversation.messages
+                    if m.role in (Role.USER, Role.ASSISTANT)
+                )
             )
             if not matches:
                 continue

@@ -80,12 +80,14 @@ def test_find_checkpoints_multiple_checkpoints_across_conversation():
     assert [cp.slug for cp in checkpoints] == ["first", "second"]
 
 
-def test_find_checkpoints_multiple_checkpoints_within_a_single_message():
+def test_find_checkpoints_one_checkpoint_per_tool_result_message():
+    # A chat_checkpoint TOOL_RESULT is always exactly one message whose text
+    # is exactly one checkpoint line -- one match per message, at most.
     line1 = format_checkpoint_line("a")
     line2 = format_checkpoint_line("b")
     conversation = Conversation(
         ref=_ref(),
-        messages=[tool_result(f"{line1}\nsome other output\n{line2}")],
+        messages=[tool_result(line1), user("more work"), tool_result(line2)],
     )
     checkpoints = find_checkpoints(conversation)
     assert [cp.slug for cp in checkpoints] == ["a", "b"]
@@ -99,10 +101,23 @@ def test_find_checkpoints_no_checkpoints_returns_empty_list():
     assert find_checkpoints(conversation) == []
 
 
-def test_find_checkpoints_survives_being_embedded_in_larger_tool_output():
+def test_find_checkpoints_ignores_tool_result_where_checkpoint_is_not_at_the_start():
+    # If a checkpoint line appears anywhere other than the very start of a
+    # TOOL_RESULT's text, it isn't a real chat_checkpoint output (that tool
+    # never bundles anything else in) -- don't match it.
     line = format_checkpoint_line("embedded")
     noisy = f"some preamble\n{{\"result\": \"ok\"}}\n{line}\ntrailing junk"
     conversation = Conversation(ref=_ref(), messages=[tool_result(noisy)])
-    checkpoints = find_checkpoints(conversation)
-    assert len(checkpoints) == 1
-    assert checkpoints[0].slug == "embedded"
+    assert find_checkpoints(conversation) == []
+
+
+def test_find_checkpoints_ignores_checkpoint_quoted_inside_chat_fork_output():
+    # A chat_fork TOOL_RESULT renders a nested transcript of another
+    # conversation, always starting with a turn header. A checkpoint that
+    # was genuinely created in that *other* conversation, however it's
+    # quoted somewhere inside, must not be picked up here -- only a
+    # checkpoint at this message's own start counts.
+    line = format_checkpoint_line("from-another-conversation")
+    nested_fork_output = f"## ASSISTANT\n> {line}\n\n---\nEND CHAT SUMMARY"
+    conversation = Conversation(ref=_ref(), messages=[tool_result(nested_fork_output)])
+    assert find_checkpoints(conversation) == []
