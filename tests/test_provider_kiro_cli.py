@@ -5,9 +5,12 @@ from chat_mother_forker.models import Role
 from chat_mother_forker.providers.kiro_cli import KiroCliProvider, _kiro_home
 
 
-def _write_session(kiro_home, session_id, lines):
+def _write_session(kiro_home, session_id, lines, cwd=None):
     """Write a session JSONL file at the expected location:
     <kiro_home>/sessions/cli/<session_id>.jsonl
+
+    If `cwd` is given, also writes the sidecar `<session_id>.json` metadata
+    file with that `cwd` field, mirroring the real on-disk layout.
     """
     cli_dir = kiro_home / "sessions" / "cli"
     cli_dir.mkdir(parents=True, exist_ok=True)
@@ -15,6 +18,9 @@ def _write_session(kiro_home, session_id, lines):
     with jsonl_path.open("w", encoding="utf-8") as f:
         for line in lines:
             f.write(json.dumps(line) + "\n")
+    if cwd is not None:
+        meta_path = cli_dir / f"{session_id}.json"
+        meta_path.write_text(json.dumps({"session_id": session_id, "cwd": cwd}), encoding="utf-8")
     return jsonl_path
 
 
@@ -422,3 +428,38 @@ def test_checkpoint_discovery_through_kiro_cli_provider(tmp_path):
     assert len(checkpoints) == 1
     assert checkpoints[0].slug == "test-slug"
     assert checkpoints[0].uuid == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def test_load_sets_project_from_sidecar_metadata_cwd(tmp_path):
+    _write_session(
+        tmp_path,
+        "session-1",
+        [_prompt("hi")],
+        cwd="C:\\Dev\\github\\chat-mother-forker",
+    )
+    provider = KiroCliProvider(kiro_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+    conversation = provider.load(ref)
+
+    assert conversation.project == "chat-mother-forker"
+
+
+def test_load_project_is_none_when_no_sidecar_metadata(tmp_path):
+    _write_session(tmp_path, "session-1", [_prompt("hi")])
+    provider = KiroCliProvider(kiro_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+    conversation = provider.load(ref)
+
+    assert conversation.project is None
+
+
+def test_load_project_is_none_when_sidecar_metadata_malformed(tmp_path):
+    _write_session(tmp_path, "session-1", [_prompt("hi")])
+    cli_dir = tmp_path / "sessions" / "cli"
+    (cli_dir / "session-1.json").write_text("{not valid json", encoding="utf-8")
+
+    provider = KiroCliProvider(kiro_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+    conversation = provider.load(ref)
+
+    assert conversation.project is None

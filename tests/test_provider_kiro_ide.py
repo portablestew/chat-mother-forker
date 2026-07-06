@@ -756,3 +756,96 @@ class TestCheckpointIntegration:
         checkpoints = find_checkpoints(conv)
         assert len(checkpoints) == 1
         assert checkpoints[0].slug == "stitched-cp"
+
+
+# ---------------------------------------------------------------------------
+# Project extraction from staticDirectoryView
+# ---------------------------------------------------------------------------
+
+
+def _static_directory_view_entry(root_path: str) -> dict:
+    """Build a context.messages 'document' entry containing a fileTree whose
+    first entry is `root_path` (mirrors what Kiro IDE actually embeds).
+    """
+    sdv = (
+        "You are operating in a workspace with files and folders.\n\n"
+        f"<fileTree>\n<folder name='{root_path}\\.git' closed />\n"
+        f"<file name='{root_path}\\.gitignore' />\n</fileTree>"
+    )
+    return {
+        "role": "tool",
+        "entries": [
+            {
+                "type": "document",
+                "document": {
+                    "type": "directory",
+                    "target": 500,
+                    "expandedPaths": [],
+                    "openedFiles": [],
+                    "staticDirectoryView": sdv,
+                },
+            },
+            {"type": "toolUseResponse", "message": "ok"},
+        ],
+    }
+
+
+class TestProjectExtraction:
+    def test_extracts_project_from_static_directory_view(self, tmp_path):
+        data = _minimal_execution(context_messages=[
+            {"role": "human", "entries": [{"type": "text", "text": "hi"}]},
+            _static_directory_view_entry("c:\\Dev\\github\\chat-mother-forker"),
+        ])
+        exec_dir = _make_workspace_hash(tmp_path)
+        _write_execution(exec_dir, "exec.json", data)
+
+        provider = KiroIdeProvider(storage_root=tmp_path)
+        ref = next(iter(provider.list_candidates()))
+        conv = provider.load(ref)
+
+        assert conv.project == "chat-mother-forker"
+
+    def test_project_is_none_when_no_document_entries(self, tmp_path):
+        data = _minimal_execution(context_messages=[
+            {"role": "human", "entries": [{"type": "text", "text": "hi"}]},
+        ])
+        exec_dir = _make_workspace_hash(tmp_path)
+        _write_execution(exec_dir, "exec.json", data)
+
+        provider = KiroIdeProvider(storage_root=tmp_path)
+        ref = next(iter(provider.list_candidates()))
+        conv = provider.load(ref)
+
+        assert conv.project is None
+
+    def test_project_recovered_during_stitching_from_prior_terminal_execution(self, tmp_path):
+        """When the newest execution is 'running' with empty context, the
+        project name should still be recovered from the prior terminal
+        execution used for stitching.
+        """
+        exec_dir = _make_workspace_hash(tmp_path)
+
+        _write_execution(exec_dir, "exec_done.json", _minimal_execution(
+            session_id="sess-1",
+            start_time=1000,
+            status="succeed",
+            context_messages=[
+                {"role": "human", "entries": [{"type": "text", "text": "earlier question"}]},
+                _static_directory_view_entry("c:\\Dev\\github\\chat-mother-forker"),
+            ],
+        ))
+
+        running_path = _write_execution(exec_dir, "exec_running.json", _minimal_execution(
+            session_id="sess-1",
+            start_time=2000,
+            status="running",
+            context_messages=[],
+            input_messages=[{"content": [{"type": "text", "text": "new question"}]}],
+        ))
+
+        provider = KiroIdeProvider(storage_root=tmp_path)
+        refs = list(provider.list_candidates())
+        assert refs[0].locator == str(running_path)
+
+        conv = provider.load(refs[0])
+        assert conv.project == "chat-mother-forker"

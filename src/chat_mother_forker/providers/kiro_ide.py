@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -48,10 +49,46 @@ from chat_mother_forker.providers.base import ChatProvider
 # Well-known subdirectory name where execution logs live within each workspace hash dir.
 _EXEC_LOGS_SUBDIR = "414d1636299d2b9e4ce7e17fb11f63e9"
 
+# Matches the first fileTree entry Kiro IDE embeds in a "document" entry's
+# staticDirectoryView text, e.g. "<folder name='c:\Dev\github\my-project\.git'
+# closed />". The path's second-to-last segment is the workspace root name
+# (the last segment is always some child of it, .git/.gitignore/etc.).
+_FILETREE_ENTRY_RE = re.compile(r"<(?:folder|file) name='([^']+)'")
+
 # Maximum age (in days) of execution log files to consider during indexing.
 # Files with a filesystem mtime older than this are skipped entirely,
 # avoiding expensive JSON parsing of stale data.
 MAX_INDEX_AGE_DAYS = 30
+
+
+def _extract_project(exec_data: dict) -> Optional[str]:
+    """Best-effort project/workspace name for an execution log.
+
+    Kiro IDE doesn't store the workspace path as a discrete field anywhere
+    in the execution log -- it only appears embedded in the
+    ``staticDirectoryView`` text of a "document" tool-result entry (the
+    rendered `<fileTree>` block shown to the model). Scan context.messages
+    for the first such entry and pull the workspace root name out of its
+    first listed path, e.g. "c:\\Dev\\github\\my-project\\.git" ->
+    "my-project".
+    """
+    for ctx_msg in exec_data.get("context", {}).get("messages", []):
+        for entry in ctx_msg.get("entries", []):
+            if not isinstance(entry, dict) or entry.get("type") != "document":
+                continue
+            document = entry.get("document")
+            if not isinstance(document, dict):
+                continue
+            sdv = document.get("staticDirectoryView", "")
+            if not isinstance(sdv, str):
+                continue
+            match = _FILETREE_ENTRY_RE.search(sdv)
+            if not match:
+                continue
+            parts = re.split(r"[\\/]+", match.group(1))
+            if len(parts) >= 2 and parts[-2]:
+                return parts[-2]
+    return None
 
 
 def _trim_before_first_user(messages: list[Message]) -> list[Message]:
@@ -123,6 +160,7 @@ class KiroIdeProvider(ChatProvider):
             return Conversation(ref=ref, messages=[])
 
         messages = self._parse_execution_log(data)
+        project = _extract_project(data)
 
         # When the newest execution is still running, its context.messages
         # is typically empty (Kiro IDE backfills it only after the turn
@@ -133,12 +171,16 @@ class KiroIdeProvider(ChatProvider):
             data.get("status") == "running"
             and not data.get("context", {}).get("messages")
         ):
-            messages = self._stitch_running_execution(data, ref.conversation_id)
+            messages, stitched_project = self._stitch_running_execution(data, ref.conversation_id)
+            if project is None:
+                project = stitched_project
 
         messages = _trim_before_first_user(messages)
-        return Conversation(ref=ref, messages=messages)
+        return Conversation(ref=ref, messages=messages, project=project)
 
-    def _stitch_running_execution(self, running_data: dict, session_id: str) -> list[Message]:
+    def _stitch_running_execution(
+        self, running_data: dict, session_id: str
+    ) -> tuple[list[Message], Optional[str]]:
         """Combine the previous terminal execution's full history with the
         running execution's own new-turn content.
 
@@ -148,6 +190,10 @@ class KiroIdeProvider(ChatProvider):
         ``input.data.messages`` (the new user prompt) and ``actions[]``
         (the agent's in-progress work), since its ``context.messages`` is
         empty at this point.
+
+        Returns the stitched messages plus the project name recovered from
+        the previous execution's context (the running file has none of its
+        own to offer, since its context.messages is empty).
         """
         start_time = running_data.get("startTime", float("inf"))
         previous = self._find_previous_terminal_execution(session_id, start_time)
@@ -155,10 +201,11 @@ class KiroIdeProvider(ChatProvider):
         if previous is None:
             # No prior terminal execution to fall back on -- just parse
             # whatever the running file itself has (likely sparse).
-            return self._parse_execution_log(running_data)
+            return self._parse_execution_log(running_data), None
 
         # Full prior history from the completed execution
         messages = self._parse_execution_log(previous)
+        project = _extract_project(previous)
 
         # Append the running execution's new-turn content only
         input_messages = running_data.get("input", {}).get("data", {}).get("messages", [])
@@ -171,7 +218,7 @@ class KiroIdeProvider(ChatProvider):
         for action in running_data.get("actions", []):
             messages.extend(self._parse_action(action))
 
-        return messages
+        return messages, project
 
     _TERMINAL_STATUSES = ("succeed", "aborted", "yielded")
 

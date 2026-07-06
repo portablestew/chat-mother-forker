@@ -43,10 +43,16 @@ class FakeProvider(ChatProvider):
 
     def __init__(self, name: str = "fake"):
         self.name = name
-        self._conversations: dict[str, tuple[float, list[Message]]] = {}
+        self._conversations: dict[str, tuple[float, list[Message], Optional[str]]] = {}
 
-    def add(self, conversation_id: str, mtime: float, messages: list[Message]) -> None:
-        self._conversations[conversation_id] = (mtime, messages)
+    def add(
+        self,
+        conversation_id: str,
+        mtime: float,
+        messages: list[Message],
+        project: Optional[str] = None,
+    ) -> None:
+        self._conversations[conversation_id] = (mtime, messages, project)
 
     def list_candidates(self) -> Iterable[ConversationRef]:
         return [
@@ -56,12 +62,12 @@ class FakeProvider(ChatProvider):
                 locator=cid,
                 mtime=mtime,
             )
-            for cid, (mtime, _messages) in self._conversations.items()
+            for cid, (mtime, _messages, _project) in self._conversations.items()
         ]
 
     def load(self, ref: ConversationRef) -> Conversation:
-        _mtime, messages = self._conversations[ref.conversation_id]
-        return Conversation(ref=ref, messages=list(messages))
+        _mtime, messages, project = self._conversations[ref.conversation_id]
+        return Conversation(ref=ref, messages=list(messages), project=project)
 
 
 @pytest.fixture

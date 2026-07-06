@@ -37,6 +37,9 @@ class SearchResult:
     mtime: float
     preview: str
     checkpoints: list[Checkpoint]
+    # Best-effort project/workspace directory name, e.g. "chat-mother-forker".
+    # None when the provider couldn't determine it.
+    project: Optional[str] = None
     # Subset of "conversation_id", "checkpoint_slug", "checkpoint_uuid",
     # "transcript" -- which of the searchable fields the needle matched.
     # Empty when `search` was None.
@@ -147,6 +150,7 @@ def search_conversations(
                 mtime=ref.mtime,
                 preview=truncate_preview(conversation.first_user_text(), MAX_PREVIEW_CHARS),
                 checkpoints=checkpoints,
+                project=conversation.project,
                 matched_in=matched_in,
                 transcript_hit_count=transcript_matches.hit_count,
                 first_context=transcript_matches.first_context,
@@ -184,7 +188,8 @@ def render_search_results(results: list[SearchResult], search: Optional[str]) ->
 
     lines = []
     for r in results:
-        lines.append(f"- {r.date} | {r.provider}:{r.conversation_id}")
+        project_suffix = f" | {r.project}" if r.project else ""
+        lines.append(f"- {r.date} | {r.provider}:{r.conversation_id}{project_suffix}")
         lines.append(f"  prompt: {r.preview or '(empty)'}")
         if r.checkpoints:
             slugs = ", ".join(f"{cp.slug} (UUID={cp.uuid})" for cp in r.checkpoints)

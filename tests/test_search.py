@@ -303,3 +303,42 @@ def test_render_search_results_no_matched_line_when_no_search(fake_provider):
     results = search_conversations([fake_provider], search=None)
     out = render_search_results(results, search=None)
     assert "matched:" not in out
+
+
+def test_search_conversations_includes_project_when_available(fake_provider):
+    fake_provider.add("c1", mtime=1, messages=[user("hi")], project="chat-mother-forker")
+
+    results = search_conversations([fake_provider], search=None)
+    assert results[0].project == "chat-mother-forker"
+
+
+def test_search_conversations_project_is_none_when_unavailable(fake_provider):
+    fake_provider.add("c1", mtime=1, messages=[user("hi")])
+
+    results = search_conversations([fake_provider], search=None)
+    assert results[0].project is None
+
+
+def test_render_search_results_includes_project_in_header_line(fake_provider):
+    fake_provider.add("c1", mtime=1, messages=[user("hi")], project="chat-mother-forker")
+
+    results = search_conversations([fake_provider], search=None)
+    out = render_search_results(results, search=None)
+
+    lines = out.splitlines()
+    header_line = next(line for line in lines if line.startswith("- "))
+    assert "fake:c1" in header_line
+    assert "chat-mother-forker" in header_line
+
+
+def test_render_search_results_omits_project_when_none(fake_provider):
+    fake_provider.add("c1", mtime=1, messages=[user("hi")])
+
+    results = search_conversations([fake_provider], search=None)
+    out = render_search_results(results, search=None)
+
+    lines = out.splitlines()
+    header_line = next(line for line in lines if line.startswith("- "))
+    # No trailing " | " with nothing after it, and no stray "None".
+    assert not header_line.endswith("| ")
+    assert "None" not in header_line

@@ -14,10 +14,14 @@ Each `.jsonl` file is a JSON-lines event log. Each line has:
       "type": "user"|"assistant"|"system"|"file-history-snapshot"|...,
       "message": {"role": "user"|"assistant", "content": ...},
       "sessionId": "...",
+      "cwd": "C:\\Dev\\github\\my-project",
       "timestamp": "2026-07-04T23:34:16.737Z",
       "uuid": "...",
       ...
     }
+
+`cwd` (present on every line) gives us the workspace directory directly;
+its basename becomes `Conversation.project`.
 
 Message content can be:
 - A plain string (for simple messages).
@@ -36,7 +40,7 @@ import os
 from pathlib import Path
 from typing import Iterable, Optional
 
-from chat_mother_forker.models import Conversation, ConversationRef, Message, Role
+from chat_mother_forker.models import Conversation, ConversationRef, Message, Role, basename_from_path
 from chat_mother_forker.providers.base import ChatProvider
 
 _JSONL_SUFFIX = ".jsonl"
@@ -123,6 +127,7 @@ class ClaudeCodeProvider(ChatProvider):
     def load(self, ref: ConversationRef) -> Conversation:
         jsonl_path = Path(ref.locator)
         messages: list[Message] = []
+        project: Optional[str] = None
 
         with jsonl_path.open("r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -134,11 +139,16 @@ class ClaudeCodeProvider(ChatProvider):
                 except json.JSONDecodeError:
                     continue
 
+                if project is None:
+                    cwd = event.get("cwd")
+                    if isinstance(cwd, str) and cwd:
+                        project = basename_from_path(cwd)
+
                 extracted = self._to_messages(event)
                 messages.extend(extracted)
 
         messages = _trim_before_first_user(messages)
-        return Conversation(ref=ref, messages=messages)
+        return Conversation(ref=ref, messages=messages, project=project)
 
     @staticmethod
     def _to_messages(event: dict) -> list[Message]:

@@ -13,6 +13,24 @@ from enum import Enum
 from typing import Optional
 
 
+def basename_from_path(path: str) -> Optional[str]:
+    """Return the last path segment of `path`, e.g. "chat-mother-forker" from
+    "C:\\Dev\\github\\chat-mother-forker".
+
+    Handles both Windows ('\\') and POSIX ('/') separators regardless of the
+    host OS parsing it -- a chat history file can embed a path written on a
+    different platform than the one now reading it, so this deliberately
+    avoids os.path (which only recognizes the separator of the OS it runs
+    on).
+    """
+    if not path:
+        return None
+    normalized = path.replace("\\", "/").rstrip("/")
+    if not normalized:
+        return None
+    return normalized.rsplit("/", 1)[-1] or None
+
+
 class Role(str, Enum):
     """Who/what produced a message.
 
@@ -70,6 +88,10 @@ class Conversation:
 
     ref: ConversationRef
     messages: list[Message] = field(default_factory=list)
+    # Best-effort project/workspace directory name (e.g. "chat-mother-forker"),
+    # derived by the provider from whatever cwd/workspace info its native
+    # storage format exposes. None when a provider can't determine it.
+    project: Optional[str] = None
 
     def first_user_text(self) -> str:
         for m in self.messages:

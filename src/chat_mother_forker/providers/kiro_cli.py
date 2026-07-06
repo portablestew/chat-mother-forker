@@ -5,6 +5,10 @@ Layout on disk (rooted at KIRO_HOME which defaults to ~/.kiro):
     <KIRO_HOME>/sessions/cli/<session-uuid>.jsonl
     <KIRO_HOME>/sessions/cli/<session-uuid>.json   (session metadata)
 
+The sidecar `.json` metadata file has a top-level `cwd` field giving the
+working directory the CLI was launched from; its basename becomes
+`Conversation.project`.
+
 `<uuid>.jsonl` is a JSON-lines event log. Each line has the shape:
 
     {"version":"v1", "kind":"<Kind>", "data": {...}}
@@ -40,7 +44,7 @@ import os
 from pathlib import Path
 from typing import Iterable, Optional
 
-from chat_mother_forker.models import Conversation, ConversationRef, Message, Role
+from chat_mother_forker.models import Conversation, ConversationRef, Message, Role, basename_from_path
 from chat_mother_forker.providers.base import ChatProvider
 
 _JSONL_SUFFIX = ".jsonl"
@@ -102,7 +106,23 @@ class KiroCliProvider(ChatProvider):
                 for message in self._to_messages(event):
                     messages.append(message)
 
-        return Conversation(ref=ref, messages=messages)
+        project = self._load_project(jsonl_path)
+        return Conversation(ref=ref, messages=messages, project=project)
+
+    @staticmethod
+    def _load_project(jsonl_path: Path) -> Optional[str]:
+        """Best-effort project name from the sidecar `<uuid>.json` metadata
+        file's `cwd` field, which sits next to the `.jsonl` transcript.
+        """
+        meta_path = jsonl_path.with_suffix(".json")
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        cwd = meta.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            return basename_from_path(cwd)
+        return None
 
     @staticmethod
     def _to_messages(event: dict) -> list[Message]:

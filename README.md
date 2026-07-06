@@ -52,7 +52,9 @@ matched against the conversation id, any checkpoint slug/uuid found in the
 conversation, or the raw transcript text.
 
 For each matching conversation, returns the last-modified date, a
-`provider:conversation_id` identifier, the first ~128 characters of the
+`provider:conversation_id` identifier, the project/workspace directory
+name (when the provider could determine one — useful for telling apart
+conversations from different projects), the first ~128 characters of the
 initial user prompt, and every checkpoint slug/uuid found anywhere in it.
 When `search` is given, results also show which field(s) it matched, plus
 a hit count and ~128 characters of context around the first and last

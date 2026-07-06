@@ -10,15 +10,20 @@ from chat_mother_forker.providers.claude_code import (
 )
 
 
-def _write_session(claude_home, project, session_id, events):
+def _write_session(claude_home, project, session_id, events, cwd=None):
     """Write a session JSONL file at the expected location:
     <claude_home>/projects/<project>/<session_id>.jsonl
+
+    If `cwd` is given, it's stamped onto every event (mirroring the real
+    format, where every JSONL line carries a `cwd` field).
     """
     project_dir = claude_home / "projects" / project
     project_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = project_dir / f"{session_id}.jsonl"
     with jsonl_path.open("w", encoding="utf-8") as f:
         for event in events:
+            if cwd is not None:
+                event = {**event, "cwd": cwd}
             f.write(json.dumps(event) + "\n")
     return jsonl_path
 
@@ -261,3 +266,30 @@ def test_two_provider_instances_can_represent_different_homes(tmp_path):
     provider_b = ClaudeCodeProvider(claude_home=home_b)
     refs = gather_sorted_candidates([provider_a, provider_b], per_provider=100)
     assert [r.conversation_id for r in refs] == ["session-b", "session-a"]
+
+
+# --- project extraction from cwd ---
+
+
+def test_load_sets_project_from_cwd_field(tmp_path):
+    _write_session(
+        tmp_path,
+        "proj",
+        "session-1",
+        [_user("hello")],
+        cwd="C:\\Dev\\github\\chat-mother-forker",
+    )
+    provider = ClaudeCodeProvider(claude_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+    conversation = provider.load(ref)
+
+    assert conversation.project == "chat-mother-forker"
+
+
+def test_load_project_is_none_when_cwd_absent(tmp_path):
+    _write_session(tmp_path, "proj", "session-1", [_user("hello")])
+    provider = ClaudeCodeProvider(claude_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+    conversation = provider.load(ref)
+
+    assert conversation.project is None
