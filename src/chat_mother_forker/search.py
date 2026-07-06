@@ -17,14 +17,14 @@ this fast on machines with huge amounts of history.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional, Sequence
 
 from chat_mother_forker.checkpoint import Checkpoint, find_checkpoints
-from chat_mother_forker.models import ConversationRef, Role
+from chat_mother_forker.models import ConversationRef, Message, Role
 from chat_mother_forker.providers.base import ChatProvider
-from chat_mother_forker.truncate import MAX_PREVIEW_CHARS, truncate_preview
+from chat_mother_forker.truncate import MAX_PREVIEW_CHARS, context_window, truncate_preview
 
 CANDIDATES_PER_PROVIDER = 100
 MAX_SEARCH_RESULTS = 50
@@ -37,6 +37,13 @@ class SearchResult:
     mtime: float
     preview: str
     checkpoints: list[Checkpoint]
+    # Subset of "conversation_id", "checkpoint_slug", "checkpoint_uuid",
+    # "transcript" -- which of the searchable fields the needle matched.
+    # Empty when `search` was None.
+    matched_in: list[str] = field(default_factory=list)
+    transcript_hit_count: int = 0
+    first_context: str = ""
+    last_context: str = ""
 
     @property
     def date(self) -> str:
@@ -56,6 +63,47 @@ def gather_sorted_candidates(
     return merged
 
 
+@dataclass
+class _TranscriptMatches:
+    hit_count: int = 0
+    first_context: str = ""
+    last_context: str = ""
+
+
+def _find_transcript_matches(messages: list[Message], needle: str) -> _TranscriptMatches:
+    """Scan user/assistant messages (in conversation order) for `needle`
+    (already lowercased), returning the total occurrence count plus
+    bolded context windows around the first and last occurrence.
+
+    Occurrences are counted per-message via `str.count`, and the
+    first/last context window is extracted from whichever message holds
+    that occurrence -- never spanning multiple messages.
+    """
+    hit_count = 0
+    first_context = ""
+    last_context = ""
+
+    for m in messages:
+        if m.role not in (Role.USER, Role.ASSISTANT):
+            continue
+        lowered = m.text.lower()
+        count_in_message = lowered.count(needle)
+        if count_in_message == 0:
+            continue
+
+        hit_count += count_in_message
+        if not first_context:
+            first_idx = lowered.find(needle)
+            first_context = context_window(m.text, first_idx, len(needle))
+        last_idx = lowered.rfind(needle)
+        last_context = context_window(m.text, last_idx, len(needle))
+
+    if hit_count <= 1:
+        last_context = ""
+
+    return _TranscriptMatches(hit_count, first_context, last_context)
+
+
 def search_conversations(
     providers: Sequence[ChatProvider],
     search: Optional[str] = None,
@@ -73,19 +121,23 @@ def search_conversations(
         conversation = provider.load(ref)
         checkpoints = find_checkpoints(conversation)
 
+        matched_in: list[str] = []
+        transcript_matches = _TranscriptMatches()
+
         if needle:
             composite_id = f"{ref.provider}:{ref.conversation_id}".lower()
-            matches = (
-                needle in ref.conversation_id.lower()
-                or needle in composite_id
-                or any(needle in cp.slug.lower() or needle in cp.uuid.lower() for cp in checkpoints)
-                or any(
-                    needle in m.text.lower()
-                    for m in conversation.messages
-                    if m.role in (Role.USER, Role.ASSISTANT)
-                )
-            )
-            if not matches:
+            if needle in ref.conversation_id.lower() or needle in composite_id:
+                matched_in.append("conversation_id")
+            if any(needle in cp.slug.lower() for cp in checkpoints):
+                matched_in.append("checkpoint_slug")
+            if any(needle in cp.uuid.lower() for cp in checkpoints):
+                matched_in.append("checkpoint_uuid")
+
+            transcript_matches = _find_transcript_matches(conversation.messages, needle)
+            if transcript_matches.hit_count > 0:
+                matched_in.append("transcript")
+
+            if not matched_in:
                 continue
 
         results.append(
@@ -95,12 +147,33 @@ def search_conversations(
                 mtime=ref.mtime,
                 preview=truncate_preview(conversation.first_user_text(), MAX_PREVIEW_CHARS),
                 checkpoints=checkpoints,
+                matched_in=matched_in,
+                transcript_hit_count=transcript_matches.hit_count,
+                first_context=transcript_matches.first_context,
+                last_context=transcript_matches.last_context,
             )
         )
         if len(results) >= max_results:
             break
 
     return results
+
+
+_MATCHED_IN_LABELS = {
+    "conversation_id": "conversation id",
+    "checkpoint_slug": "checkpoint slug",
+    "checkpoint_uuid": "checkpoint uuid",
+}
+
+
+def _render_matched_in(r: SearchResult) -> str:
+    parts = []
+    for reason in r.matched_in:
+        if reason == "transcript":
+            parts.append(f"transcript ({r.transcript_hit_count} hit{'s' if r.transcript_hit_count != 1 else ''})")
+        else:
+            parts.append(_MATCHED_IN_LABELS[reason])
+    return ", ".join(parts)
 
 
 def render_search_results(results: list[SearchResult], search: Optional[str]) -> str:
@@ -116,6 +189,12 @@ def render_search_results(results: list[SearchResult], search: Optional[str]) ->
         if r.checkpoints:
             slugs = ", ".join(f"{cp.slug} (UUID={cp.uuid})" for cp in r.checkpoints)
             lines.append(f"  slugs: {slugs}")
+        if r.matched_in:
+            lines.append(f"  matched: {_render_matched_in(r)}")
+        if r.first_context:
+            lines.append(f"  first: {r.first_context}")
+        if r.last_context:
+            lines.append(f"  last: {r.last_context}")
 
     header = f'{len(results)} conversation(s)' + (f' matching "{search}"' if search else "")
     return header + ":\n" + "\n".join(lines)

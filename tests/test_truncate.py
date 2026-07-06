@@ -1,4 +1,5 @@
 from chat_mother_forker.truncate import (
+    context_window,
     truncate_middle_list,
     truncate_middle_text,
     truncate_preview,
@@ -45,23 +46,36 @@ def test_truncate_middle_text_empty_string():
 
 
 def test_truncate_preview_short_text_unchanged():
-    assert truncate_preview("hello", max_chars=256) == "hello"
+    assert truncate_preview("hello", max_chars=128) == "hello"
 
 
 def test_truncate_preview_strips_whitespace_before_measuring():
-    assert truncate_preview("   hello   ", max_chars=256) == "hello"
+    assert truncate_preview("   hello   ", max_chars=128) == "hello"
 
 
 def test_truncate_preview_truncates_from_end_with_ellipsis():
-    text = "y" * 300
-    out = truncate_preview(text, max_chars=256)
-    assert out == "y" * 256 + "..."
-    assert len(out) == 259
+    text = "y" * 150
+    out = truncate_preview(text, max_chars=128)
+    assert out == "y" * 128 + "..."
+    assert len(out) == 131
 
 
 def test_truncate_preview_exactly_at_limit_no_ellipsis():
-    text = "z" * 256
-    assert truncate_preview(text, max_chars=256) == text
+    text = "z" * 128
+    assert truncate_preview(text, max_chars=128) == text
+
+
+def test_truncate_preview_default_max_chars_is_128():
+    text = "y" * 150
+    assert truncate_preview(text) == "y" * 128 + "..."
+
+
+def test_truncate_preview_collapses_newlines():
+    text = "line one\nline two\r\nline three"
+    out = truncate_preview(text, max_chars=128)
+    assert "\n" not in out
+    assert "\r" not in out
+    assert out == "line one line two  line three"
 
 
 def test_truncate_middle_list_under_limit_returns_copy():
@@ -99,3 +113,65 @@ def test_truncate_middle_list_marker_factory_receives_correct_count():
     assert seen_counts == [90]
     assert out.count("MARK") == 1
     assert len(out) == 11  # 5 head + marker + 5 tail
+
+
+def test_context_window_bolds_the_match():
+    text = "hello widgets world"
+    out = context_window(text, text.index("widgets"), len("widgets"), width=256)
+    assert out == "hello **widgets** world"
+
+
+def test_context_window_no_ellipsis_when_fully_contained():
+    text = "short text with widgets in it"
+    out = context_window(text, text.index("widgets"), len("widgets"), width=256)
+    assert not out.startswith("...")
+    assert not out.endswith("...")
+
+
+def test_context_window_adds_ellipsis_when_clipped_on_both_sides():
+    text = "x" * 500 + "widgets" + "y" * 500
+    out = context_window(text, 500, len("widgets"), width=20)
+    assert out.startswith("...")
+    assert out.endswith("...")
+    assert "**widgets**" in out
+
+
+def test_context_window_no_leading_ellipsis_at_start_of_text():
+    text = "widgets" + "y" * 500
+    out = context_window(text, 0, len("widgets"), width=20)
+    assert not out.startswith("...")
+    assert out.endswith("...")
+    assert "**widgets**" in out
+
+
+def test_context_window_no_trailing_ellipsis_at_end_of_text():
+    text = "x" * 500 + "widgets"
+    out = context_window(text, 500, len("widgets"), width=20)
+    assert out.startswith("...")
+    assert not out.endswith("...")
+    assert "**widgets**" in out
+
+
+def test_context_window_respects_width_budget():
+    text = "x" * 500 + "widgets" + "y" * 500
+    out = context_window(text, 500, len("widgets"), width=50)
+    # Stripped of ellipses and bold markers, the window shouldn't wildly
+    # exceed the requested width.
+    stripped = out.strip(".").replace("**", "")
+    assert len(stripped) <= 50 + 2  # +/- rounding slack
+
+
+def test_context_window_default_width_is_128():
+    text = "x" * 200 + "widgets" + "y" * 200
+    out = context_window(text, 200, len("widgets"))
+    stripped = out.strip(".").replace("**", "")
+    assert len(stripped) <= 128 + 2  # +/- rounding slack
+
+
+def test_context_window_collapses_newlines():
+    text = "line one\nwidgets here\r\nline three"
+    idx = text.index("widgets")
+    out = context_window(text, idx, len("widgets"), width=128)
+    assert "\n" not in out
+    assert "\r" not in out
+    assert "**widgets**" in out

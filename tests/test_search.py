@@ -165,3 +165,141 @@ def test_render_search_results_omits_slugs_line_when_none_present(fake_provider)
     results = search_conversations([fake_provider], search=None)
     out = render_search_results(results, search=None)
     assert "slugs:" not in out
+
+
+def test_search_conversations_matched_in_reports_transcript_hit(fake_provider):
+    fake_provider.add("c1", mtime=1, messages=[user("talking about widgets today")])
+
+    results = search_conversations([fake_provider], search="widgets")
+    assert results[0].matched_in == ["transcript"]
+    assert results[0].transcript_hit_count == 1
+
+
+def test_search_conversations_matched_in_reports_conversation_id(fake_provider):
+    fake_provider.add("alpha-123", mtime=1, messages=[user("hi")])
+
+    results = search_conversations([fake_provider], search="alpha")
+    assert results[0].matched_in == ["conversation_id"]
+    assert results[0].transcript_hit_count == 0
+
+
+def test_search_conversations_matched_in_reports_checkpoint_slug(fake_provider):
+    line = format_checkpoint_line("release-plan")
+    fake_provider.add("c1", mtime=1, messages=[user("hi"), tool_result(line)])
+
+    results = search_conversations([fake_provider], search="release-plan")
+    assert results[0].matched_in == ["checkpoint_slug"]
+
+
+def test_search_conversations_matched_in_reports_checkpoint_uuid(fake_provider):
+    line = format_checkpoint_line("some-slug")
+    checkpoint_uuid = line.split("UUID=")[1].split(" ")[0]
+    fake_provider.add("c1", mtime=1, messages=[tool_result(line)])
+
+    results = search_conversations([fake_provider], search=checkpoint_uuid)
+    assert results[0].matched_in == ["checkpoint_uuid"]
+
+
+def test_search_conversations_matched_in_can_report_multiple_reasons(fake_provider):
+    line = format_checkpoint_line("widgets-plan")
+    fake_provider.add(
+        "widgets-convo", mtime=1, messages=[user("talking about widgets"), tool_result(line)]
+    )
+
+    results = search_conversations([fake_provider], search="widgets")
+    assert set(results[0].matched_in) == {"conversation_id", "checkpoint_slug", "transcript"}
+
+
+def test_search_conversations_first_context_empty_when_id_only_match(fake_provider):
+    fake_provider.add("alpha-123", mtime=1, messages=[user("hello there")])
+
+    results = search_conversations([fake_provider], search="alpha")
+    assert results[0].first_context == ""
+    assert results[0].last_context == ""
+
+
+def test_search_conversations_first_context_bolds_match(fake_provider):
+    fake_provider.add("c1", mtime=1, messages=[user("talking about widgets today")])
+
+    results = search_conversations([fake_provider], search="widgets")
+    assert "**widgets**" in results[0].first_context
+
+
+def test_search_conversations_last_context_empty_when_single_hit(fake_provider):
+    fake_provider.add("c1", mtime=1, messages=[user("talking about widgets today")])
+
+    results = search_conversations([fake_provider], search="widgets")
+    assert results[0].transcript_hit_count == 1
+    assert results[0].last_context == ""
+    assert results[0].first_context != ""
+
+
+def test_search_conversations_last_context_set_when_multiple_hits(fake_provider):
+    fake_provider.add(
+        "c1",
+        mtime=1,
+        messages=[user("widgets are great"), assistant("more widgets over here")],
+    )
+
+    results = search_conversations([fake_provider], search="widgets")
+    assert results[0].transcript_hit_count == 2
+    assert "**widgets**" in results[0].first_context
+    assert "**widgets**" in results[0].last_context
+    assert results[0].first_context != results[0].last_context
+
+
+def test_search_conversations_transcript_hit_count_sums_across_messages(fake_provider):
+    fake_provider.add(
+        "c1",
+        mtime=1,
+        messages=[
+            user("widgets widgets widgets"),
+            assistant("one more widgets mention"),
+        ],
+    )
+
+    results = search_conversations([fake_provider], search="widgets")
+    assert results[0].transcript_hit_count == 4
+
+
+def test_search_conversations_matched_in_empty_when_no_search(fake_provider):
+    fake_provider.add("c1", mtime=1, messages=[user("hello")])
+
+    results = search_conversations([fake_provider], search=None)
+    assert results[0].matched_in == []
+    assert results[0].first_context == ""
+
+
+def test_render_search_results_shows_matched_in_and_context(fake_provider):
+    fake_provider.add("c1", mtime=1, messages=[user("talking about widgets today")])
+
+    results = search_conversations([fake_provider], search="widgets")
+    out = render_search_results(results, search="widgets")
+
+    assert "matched: transcript (1 hit)" in out
+    assert "first:" in out
+    assert "**widgets**" in out
+    assert "last:" not in out
+
+
+def test_render_search_results_shows_plural_hits(fake_provider):
+    fake_provider.add(
+        "c1",
+        mtime=1,
+        messages=[user("widgets here"), assistant("widgets there")],
+    )
+
+    results = search_conversations([fake_provider], search="widgets")
+    out = render_search_results(results, search="widgets")
+
+    assert "matched: transcript (2 hits)" in out
+    assert "first:" in out
+    assert "last:" in out
+
+
+def test_render_search_results_no_matched_line_when_no_search(fake_provider):
+    fake_provider.add("c1", mtime=1, messages=[user("hi")])
+
+    results = search_conversations([fake_provider], search=None)
+    out = render_search_results(results, search=None)
+    assert "matched:" not in out

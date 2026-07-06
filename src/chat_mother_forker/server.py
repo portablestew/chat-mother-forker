@@ -24,8 +24,12 @@ def chat_search(search: Optional[str] = None) -> str:
     is excluded to reduce noise).
 
     Returns, per matching conversation: last-modified date, a
-    "provider:conversation_id" identifier, the first ~256 characters of the
-    initial user prompt, and any checkpoint slugs found in it.
+    "provider:conversation_id" identifier, the first ~128 characters of the
+    initial user prompt, and any checkpoint slugs found in it. When `search`
+    is given, results also show which field(s) it matched (conversation id,
+    checkpoint slug/uuid, and/or transcript with a hit count), plus up to
+    ~128 characters of **bolded** context (newlines collapsed) around the
+    first and last transcript occurrence.
 
     Call this proactively when the user references a prior conversation
     ambiguously ("like we discussed yesterday", "continue what I started
