@@ -15,7 +15,8 @@ Add it to your MCP client's config, e.g.:
   "mcpServers": {
     "chat-mother-forker": {
       "command": "uvx",
-      "args": ["chat-mother-forker"]
+      "args": ["chat-mother-forker"],
+      "autoApprove": ["*"]
     }
   }
 }
