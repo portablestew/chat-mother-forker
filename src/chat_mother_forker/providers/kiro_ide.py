@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -46,6 +47,11 @@ from chat_mother_forker.providers.base import ChatProvider
 
 # Well-known subdirectory name where execution logs live within each workspace hash dir.
 _EXEC_LOGS_SUBDIR = "414d1636299d2b9e4ce7e17fb11f63e9"
+
+# Maximum age (in days) of execution log files to consider during indexing.
+# Files with a filesystem mtime older than this are skipped entirely,
+# avoiding expensive JSON parsing of stale data.
+MAX_INDEX_AGE_DAYS = 30
 
 
 def _trim_before_first_user(messages: list[Message]) -> list[Message]:
@@ -214,14 +220,23 @@ class KiroIdeProvider(ChatProvider):
         """Scan all execution logs and build a session -> latest execution index.
 
         Re-scans on every call rather than caching, because execution logs
-        are written during/after each turn — a cached index goes stale
+        are written during/after each turn -- a cached index goes stale
         within the lifetime of a long-running MCP server process, causing
         chat_fork to return incomplete transcripts.
+
+        Performance optimization: uses filesystem mtime to pre-filter and
+        sort files before JSON-parsing them. Files older than
+        MAX_INDEX_AGE_DAYS are excluded entirely, and remaining files are
+        processed in most-recent-first order.
         """
         session_index: dict[str, tuple[float, Path]] = {}
         if self._storage_root is None or not self._storage_root.is_dir():
             return session_index
 
+        cutoff = time.time() - (MAX_INDEX_AGE_DAYS * 86400)
+
+        # Collect all candidate files with their filesystem mtime.
+        candidates: list[tuple[float, Path]] = []
         for hash_dir in self._storage_root.iterdir():
             if not hash_dir.is_dir() or len(hash_dir.name) != 32:
                 continue
@@ -232,7 +247,19 @@ class KiroIdeProvider(ChatProvider):
             for exec_file in exec_dir.iterdir():
                 if not exec_file.is_file():
                     continue
-                self._index_execution_file(session_index, exec_file)
+                try:
+                    mtime = exec_file.stat().st_mtime
+                except OSError:
+                    continue
+                if mtime < cutoff:
+                    continue
+                candidates.append((mtime, exec_file))
+
+        # Sort by mtime descending (most recent first).
+        candidates.sort(key=lambda item: item[0], reverse=True)
+
+        for _mtime, exec_file in candidates:
+            self._index_execution_file(session_index, exec_file)
 
         return session_index
 
