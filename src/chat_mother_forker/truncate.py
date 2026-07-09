@@ -12,7 +12,15 @@ from __future__ import annotations
 
 from typing import Sequence, TypeVar
 
-MAX_TURN_CHARS = 2000
+MAX_TURN_CHARS = 4096  # 2048 head + 2048 tail; assistant turns with multiple messages
+MAX_USER_TURN_CHARS = 2048  # user prompts get a smaller total budget than assistant turns
+
+# A single-message assistant turn is where the "juiciest" context tends to
+# live (the actual conclusion), so it gets a bigger tail than a head.
+MAX_TURN_HEAD_CHARS_SINGLE_MESSAGE = 2048
+MAX_TURN_TAIL_CHARS_SINGLE_MESSAGE = 4096
+MAX_TURN_CHARS_SINGLE_MESSAGE = MAX_TURN_HEAD_CHARS_SINGLE_MESSAGE + MAX_TURN_TAIL_CHARS_SINGLE_MESSAGE
+
 MAX_PREVIEW_CHARS = 128
 MAX_CONTEXT_CHARS = 128
 MAX_TURNS = 50
@@ -29,16 +37,26 @@ def _collapse_newlines(text: str) -> str:
     return text.replace("\r", " ").replace("\n", " ")
 
 
-def truncate_middle_text(text: str, max_chars: int = MAX_TURN_CHARS) -> str:
+def truncate_middle_text(text: str, max_chars: int = MAX_TURN_CHARS, tail_chars: int | None = None) -> str:
     """Drop the middle of `text` if it's longer than `max_chars`, replacing
     it with a `[N characters truncated]` marker line.
+
+    By default the kept head and tail are equal halves of `max_chars`. Pass
+    `tail_chars` to keep a larger (or smaller) tail than head -- e.g. for a
+    single-message turn where the tail (the conclusion) is more valuable
+    than an equally-sized head. `head_chars` is then `max_chars - tail_chars`.
     """
     if len(text) <= max_chars:
         return text
 
-    keep = max_chars // 2
-    head = text[:keep]
-    tail = text[len(text) - keep :]
+    if tail_chars is None:
+        keep_head = keep_tail = max_chars // 2
+    else:
+        keep_tail = tail_chars
+        keep_head = max(max_chars - tail_chars, 0)
+
+    head = text[:keep_head]
+    tail = text[len(text) - keep_tail :] if keep_tail else ""
     dropped = len(text) - len(head) - len(tail)
 
     return f"{head}\n[{dropped} characters truncated]\n{tail}"

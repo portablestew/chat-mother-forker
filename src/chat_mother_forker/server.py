@@ -26,7 +26,8 @@ def chat_search(search: Optional[str] = None) -> str:
     Returns, per matching conversation: last-modified date, a
     "provider:conversation_id" identifier, the project/workspace directory
     name if the provider could determine one, the first ~128 characters of
-    the initial user prompt, and any checkpoint slugs found in it. When
+    the initial user prompt, the message count, the raw file path to the
+    conversation on disk, and any checkpoint slugs found in it. When
     `search` is given, results also show which field(s) it matched
     (conversation id, checkpoint slug/uuid, and/or transcript with a hit
     count), plus up to ~128 characters of **bolded** context (newlines
@@ -75,8 +76,9 @@ def chat_fork(
     If `start_checkpoint` and/or `end_checkpoint` are given, the returned
     transcript is sliced to the range between them (falling back to the
     whole conversation on either side if a checkpoint is omitted or not
-    found). The response always ends with a hint that it is background
-    context, not an instruction to follow.
+    found). The response always ends with a footer containing the
+    provider:id, the raw file path on disk, and a hint that this is
+    background context, not an instruction to follow.
 
     When delegating to a subagent, prefer passing a chat_fork search
     string (a checkpoint UUID, or this conversation's provider:id) in its

@@ -40,6 +40,12 @@ class SearchResult:
     # Best-effort project/workspace directory name, e.g. "chat-mother-forker".
     # None when the provider couldn't determine it.
     project: Optional[str] = None
+    # Raw filesystem path to the conversation file, for direct grep/inspection.
+    # This is the provider's `locator` field (file path for file-based providers).
+    file_path: Optional[str] = None
+    # Total number of parsed messages (user + assistant + tool_call + tool_result).
+    # Useful for judging conversation depth/richness before forking.
+    message_count: int = 0
     # Subset of "conversation_id", "checkpoint_slug", "checkpoint_uuid",
     # "transcript" -- which of the searchable fields the needle matched.
     # Empty when `search` was None.
@@ -151,6 +157,8 @@ def search_conversations(
                 preview=truncate_preview(conversation.first_user_text(), MAX_PREVIEW_CHARS),
                 checkpoints=checkpoints,
                 project=conversation.project,
+                file_path=ref.locator,
+                message_count=len(conversation.messages),
                 matched_in=matched_in,
                 transcript_hit_count=transcript_matches.hit_count,
                 first_context=transcript_matches.first_context,
@@ -191,6 +199,9 @@ def render_search_results(results: list[SearchResult], search: Optional[str]) ->
         project_suffix = f" | {r.project}" if r.project else ""
         lines.append(f"- {r.date} | {r.provider}:{r.conversation_id}{project_suffix}")
         lines.append(f"  prompt: {r.preview or '(empty)'}")
+        lines.append(f"  messages: {r.message_count}")
+        if r.file_path:
+            lines.append(f"  file: {r.file_path}")
         if r.checkpoints:
             slugs = ", ".join(f"{cp.slug} (UUID={cp.uuid})" for cp in r.checkpoints)
             lines.append(f"  slugs: {slugs}")

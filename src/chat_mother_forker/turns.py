@@ -15,7 +15,10 @@ from dataclasses import dataclass
 from chat_mother_forker.models import Conversation, Message, Role
 from chat_mother_forker.truncate import (
     MAX_TURN_CHARS,
+    MAX_TURN_CHARS_SINGLE_MESSAGE,
+    MAX_TURN_TAIL_CHARS_SINGLE_MESSAGE,
     MAX_TURNS,
+    MAX_USER_TURN_CHARS,
     truncate_middle_list,
     truncate_middle_text,
 )
@@ -74,7 +77,19 @@ def _sub_label(message: Message) -> str:
     return label
 
 
-def render_turn(turn: Turn, max_chars: int = MAX_TURN_CHARS) -> str:
+def render_turn(turn: Turn, max_chars: int | None = None) -> str:
+    """Render a turn's body, middle-truncated to a character budget.
+
+    If `max_chars` is given explicitly, it's applied as a plain symmetric
+    head/tail split (backward-compatible override). Otherwise the budget is
+    chosen per turn:
+
+    - User turns get a smaller total budget (`MAX_USER_TURN_CHARS`).
+    - A single-message assistant turn (e.g. one long assistant reply with no
+      tool calls) gets a bigger tail than head, since the conclusion at the
+      end tends to be the most useful context to preserve.
+    - Any other assistant turn gets the general `MAX_TURN_CHARS` split evenly.
+    """
     if turn.kind == _SYSTEM_MARKER_TURN:
         # A synthetic marker turn standing in for dropped turns -- rendered
         # plainly, no header/quoting.
@@ -83,7 +98,18 @@ def render_turn(turn: Turn, max_chars: int = MAX_TURN_CHARS) -> str:
     header = f"## {turn.kind}"
     sections = [f"{_sub_label(m)}\n{_quote(m.text)}" for m in turn.messages if m.text.strip()]
     body = "\n\n".join(sections)
-    body = truncate_middle_text(body, max_chars)
+
+    if max_chars is not None:
+        body = truncate_middle_text(body, max_chars)
+    elif turn.kind == USER_TURN:
+        body = truncate_middle_text(body, MAX_USER_TURN_CHARS)
+    elif len(sections) == 1:
+        body = truncate_middle_text(
+            body, MAX_TURN_CHARS_SINGLE_MESSAGE, tail_chars=MAX_TURN_TAIL_CHARS_SINGLE_MESSAGE
+        )
+    else:
+        body = truncate_middle_text(body, MAX_TURN_CHARS)
+
     return f"{header}\n{body}"
 
 
@@ -94,13 +120,17 @@ def _turns_dropped_marker(count: int) -> Turn:
 def render_conversation(
     conversation: Conversation,
     max_turns: int = MAX_TURNS,
-    max_turn_chars: int = MAX_TURN_CHARS,
+    max_turn_chars: int | None = None,
 ) -> str:
     """Render a full conversation as annotated, truncated turns.
 
     Both the number of turns and the length of each individual turn are
     capped, dropping the middle in each case (per design: the important
     parts of a turn, and of a conversation, are the beginning and the end).
+
+    `max_turn_chars`, if given, overrides the per-turn budget uniformly
+    (see `render_turn`); otherwise each turn picks its own budget based on
+    its kind and shape.
     """
     turns = group_into_turns(conversation.messages)
     turns = truncate_middle_list(turns, max_turns, _turns_dropped_marker)
