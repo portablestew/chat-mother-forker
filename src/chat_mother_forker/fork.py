@@ -16,6 +16,16 @@ messages from general search also keeps someone else's quoted
 conversation from polluting results.
 
 Within each tier, the newest conversation wins.
+
+The conversation currently invoking chat_fork itself (see
+`current_chat.is_current_conversation`) is excluded from tiers 2-4:
+its own just-written prose is often the *newest* text containing whatever
+term the user searched for (e.g. this very reply discussing a search term),
+which would otherwise win a same-tier recency tiebreak and self-fork
+instead of finding the older conversation the user actually meant. Tier 1
+(an explicit conversation id/uuid reference) is exempt from this exclusion,
+since a user who names this conversation's id/uuid outright is presumably
+doing so on purpose (e.g. testing chat_fork against itself).
 """
 
 from __future__ import annotations
@@ -24,6 +34,7 @@ from enum import IntEnum
 from typing import Optional, Sequence
 
 from chat_mother_forker.checkpoint import find_checkpoints
+from chat_mother_forker.current_chat import is_current_conversation
 from chat_mother_forker.models import Conversation, Role
 from chat_mother_forker.providers.base import ChatProvider
 from chat_mother_forker.search import CANDIDATES_PER_PROVIDER, gather_sorted_candidates
@@ -41,13 +52,25 @@ class _MatchTier(IntEnum):
 
 
 def _match_tier(
-    needle: str, provider_name: str, conversation_id: str, conversation: Conversation
+    needle: str,
+    provider_name: str,
+    conversation_id: str,
+    conversation: Conversation,
+    is_current: bool,
 ) -> _MatchTier:
-    """Determine the highest-priority tier at which `needle` matches."""
+    """Determine the highest-priority tier at which `needle` matches.
+
+    `is_current` conversations skip tiers 2-4 (checkpoint/user-prompt/
+    assistant-text matching) -- see module docstring -- but remain eligible
+    for tier 1, since an explicit id/uuid reference is presumably deliberate.
+    """
     # Tier 1: conversation ID (bare or composite provider:id)
     composite_id = f"{provider_name}:{conversation_id}".lower()
     if needle in conversation_id.lower() or needle in composite_id:
         return _MatchTier.CONVERSATION_ID
+
+    if is_current:
+        return _MatchTier.NO_MATCH
 
     # Tier 2: checkpoint slug or uuid
     for cp in find_checkpoints(conversation):
@@ -97,7 +120,8 @@ def find_newest_match(
     for ref in gather_sorted_candidates(providers, candidates_per_provider):
         provider = by_name[ref.provider]
         conversation = provider.load(ref)
-        tier = _match_tier(needle, ref.provider, ref.conversation_id, conversation)
+        is_current = is_current_conversation(ref, conversation)
+        tier = _match_tier(needle, ref.provider, ref.conversation_id, conversation, is_current)
 
         if tier is _MatchTier.NO_MATCH:
             continue

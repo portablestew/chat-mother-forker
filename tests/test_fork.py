@@ -1,3 +1,5 @@
+import time
+
 from chat_mother_forker.checkpoint import format_checkpoint_line
 from chat_mother_forker.fork import (
     find_newest_match,
@@ -226,3 +228,62 @@ def test_render_fork_with_checkpoint_range(fake_provider):
     assert "core work happens here" in out
     assert "setup work" not in out
     assert "cleanup work" not in out
+
+
+def test_find_newest_match_skips_current_conversation_text_match(fake_provider):
+    """A conversation that's the one currently calling chat_fork (newest
+    message is an unanswered chat_fork/chat_search/chat_checkpoint
+    TOOL_CALL, mtime very recent) is excluded from text/checkpoint tiers --
+    it shouldn't win a same-tier recency tiebreak against an older
+    conversation just because its own just-written reply happens to
+    contain the search term.
+    """
+    fake_provider.add(
+        "older-actual-target",
+        mtime=1,
+        messages=[user("let's discuss widgets today")],
+    )
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[
+            user("What was discussed about widgets?"),
+            tool_call("chat_fork", text='{"search":"widgets"}'),
+        ],
+    )
+
+    match = find_newest_match([fake_provider], "widgets")
+    assert match is not None
+    assert match.ref.conversation_id == "older-actual-target"
+
+
+def test_find_newest_match_current_conversation_still_matches_by_explicit_id(fake_provider):
+    """Tier 1 (explicit conversation id/uuid) is exempt from the
+    current-conversation exclusion -- naming the id outright is presumably
+    deliberate, e.g. testing chat_fork against itself.
+    """
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[
+            user("hello"),
+            tool_call("chat_fork", text="{}"),
+        ],
+    )
+
+    match = find_newest_match([fake_provider], "current-convo")
+    assert match is not None
+    assert match.ref.conversation_id == "current-convo"
+
+
+def test_find_newest_match_current_conversation_with_no_other_match_returns_none(fake_provider):
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[
+            user("talking about widgets"),
+            tool_call("chat_fork", text="{}"),
+        ],
+    )
+
+    assert find_newest_match([fake_provider], "widgets") is None

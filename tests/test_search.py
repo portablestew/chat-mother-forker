@@ -1,5 +1,8 @@
+import time
+
 from chat_mother_forker.checkpoint import format_checkpoint_line
 from chat_mother_forker.search import (
+    SearchResults,
     gather_sorted_candidates,
     render_search_results,
     search_conversations,
@@ -41,6 +44,25 @@ def test_search_conversations_no_filter_returns_all_up_to_max_results(fake_provi
     assert len(results) == 3
     # Newest first.
     assert [r.conversation_id for r in results] == ["c4", "c3", "c2"]
+
+
+def test_search_conversations_current_chat_does_not_count_against_max_results(fake_provider):
+    """The current chat is reported separately from `others` and shouldn't
+    eat into `max_results` -- requesting 3 results should yield 3 others
+    plus the current chat, not 2 others."""
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[user("hi"), tool_call("chat_search", text="{}")],
+    )
+    for i in range(5):
+        fake_provider.add(f"c{i}", mtime=float(i), messages=[user(f"prompt {i}")])
+
+    results = search_conversations([fake_provider], search=None, max_results=3)
+    assert results.current is not None
+    assert results.current.conversation_id == "current-convo"
+    assert len(results.others) == 3
+    assert [r.conversation_id for r in results.others] == ["c4", "c3", "c2"]
 
 
 def test_search_conversations_filters_by_conversation_id_substring(fake_provider):
@@ -110,7 +132,7 @@ def test_search_conversations_reports_all_checkpoints_regardless_of_search_term(
 def test_search_conversations_no_match_returns_empty_list(fake_provider):
     fake_provider.add("c1", mtime=1, messages=[user("hello")])
     results = search_conversations([fake_provider], search="nonexistent-xyz")
-    assert results == []
+    assert len(results) == 0
 
 
 def test_search_conversations_ignores_tool_call_and_result_text(fake_provider):
@@ -124,7 +146,7 @@ def test_search_conversations_ignores_tool_call_and_result_text(fake_provider):
         ],
     )
     results = search_conversations([fake_provider], search="unique-tool-phrase")
-    assert results == []
+    assert len(results) == 0
 
 
 def test_search_conversations_preview_uses_first_user_message_only(fake_provider):
@@ -142,11 +164,11 @@ def test_search_conversations_preview_uses_first_user_message_only(fake_provider
 
 
 def test_render_search_results_no_results_no_search_term():
-    assert render_search_results([], search=None) == "No conversations found."
+    assert render_search_results(SearchResults(), search=None) == "No conversations found."
 
 
 def test_render_search_results_no_results_with_search_term():
-    out = render_search_results([], search="xyz")
+    out = render_search_results(SearchResults(), search="xyz")
     assert "xyz" in out
     assert "No conversations" in out
 
@@ -342,3 +364,142 @@ def test_render_search_results_omits_project_when_none(fake_provider):
     # No trailing " | " with nothing after it, and no stray "None".
     assert not header_line.endswith("| ")
     assert "None" not in header_line
+
+
+def test_search_conversations_flags_current_chat(fake_provider):
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[user("test the search"), tool_call("chat_search", text='{"search":"x"}')],
+    )
+    fake_provider.add("other-convo", mtime=time.time(), messages=[user("hi")])
+
+    results = search_conversations([fake_provider], search=None)
+    assert results.current is not None
+    assert results.current.conversation_id == "current-convo"
+    assert [r.conversation_id for r in results.others] == ["other-convo"]
+
+
+def test_search_conversations_not_current_when_last_message_is_not_chat_search_call(fake_provider):
+    fake_provider.add(
+        "c1",
+        mtime=time.time(),
+        messages=[user("hi"), tool_call("grep_search", text="{}")],
+    )
+
+    results = search_conversations([fake_provider], search=None)
+    assert results.current is None
+    assert results[0].is_current is False
+
+
+def test_search_conversations_not_current_when_tool_result_already_present(fake_provider):
+    fake_provider.add(
+        "c1",
+        mtime=time.time(),
+        messages=[
+            user("hi"),
+            tool_call("chat_search", text="{}"),
+            tool_result("1 conversation(s)"),
+        ],
+    )
+
+    results = search_conversations([fake_provider], search=None)
+    assert results.current is None
+    assert results[0].is_current is False
+
+
+def test_search_conversations_not_current_when_too_old(fake_provider):
+    fake_provider.add(
+        "c1",
+        mtime=time.time() - 3600,
+        messages=[user("hi"), tool_call("chat_search", text="{}")],
+    )
+
+    results = search_conversations([fake_provider], search=None)
+    assert results.current is None
+    assert results[0].is_current is False
+
+
+def test_search_conversations_only_flags_one_current_chat(fake_provider):
+    """If two candidates both heuristically look like the current chat
+    (e.g. two IDE windows each mid-chat_search), only the newest is kept
+    as `current` -- the other is demoted to a normal result."""
+    fake_provider.add(
+        "older",
+        mtime=time.time() - 1,
+        messages=[user("hi"), tool_call("chat_search", text="{}")],
+    )
+    fake_provider.add(
+        "newer",
+        mtime=time.time(),
+        messages=[user("hi"), tool_call("chat_search", text="{}")],
+    )
+
+    results = search_conversations([fake_provider], search=None)
+    assert results.current is not None
+    assert results.current.conversation_id == "newer"
+    assert [r.conversation_id for r in results.others] == ["older"]
+    # The demoted candidate's is_current flag is cleared too.
+    assert results.others[0].is_current is False
+
+
+def test_search_conversations_current_chat_is_first_regardless_of_recency(fake_provider):
+    """The current chat is always first in iteration order, even when a
+    more recent (non-current) conversation exists."""
+    fake_provider.add(
+        "current-but-older",
+        mtime=time.time() - 10,
+        messages=[user("hi"), tool_call("chat_search", text="{}")],
+    )
+    fake_provider.add("newer-not-current", mtime=time.time(), messages=[user("hi")])
+
+    results = search_conversations([fake_provider], search=None)
+    assert [r.conversation_id for r in results] == ["current-but-older", "newer-not-current"]
+
+
+def test_render_search_results_shows_current_chat_id_line(fake_provider):
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[user("test the search"), tool_call("chat_search", text="{}")],
+    )
+
+    results = search_conversations([fake_provider], search=None)
+    out = render_search_results(results, search=None)
+
+    assert "current chat id = fake:current-convo" in out
+    # The usual metadata block is suppressed for the current-chat entry.
+    assert "prompt:" not in out
+    assert "messages:" not in out
+
+
+def test_render_search_results_current_chat_not_counted_in_total(fake_provider):
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[user("test the search"), tool_call("chat_search", text="{}")],
+    )
+    for i in range(5):
+        fake_provider.add(f"other-{i}", mtime=float(i), messages=[user(f"prompt {i}")])
+
+    results = search_conversations([fake_provider], search=None)
+    out = render_search_results(results, search=None)
+    lines = out.splitlines()
+
+    assert lines[0] == "current chat id = fake:current-convo"
+    assert lines[1] == "5 conversation(s):"
+
+
+def test_render_search_results_current_chat_with_zero_other_matches(fake_provider):
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[user("test the search"), tool_call("chat_search", text="{}")],
+    )
+
+    results = search_conversations([fake_provider], search="pippin docs")
+    out = render_search_results(results, search="pippin docs")
+
+    lines = out.splitlines()
+    assert lines[0] == "current chat id = fake:current-convo"
+    assert lines[1] == '0 conversation(s) matching "pippin docs".'

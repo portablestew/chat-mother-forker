@@ -33,6 +33,12 @@ def chat_search(search: Optional[str] = None) -> str:
     count), plus up to ~128 characters of **bolded** context (newlines
     collapsed) around the first and last transcript occurrence.
 
+    The conversation that is itself in the middle of calling this very
+    chat_search tool is detected heuristically (newest message is an
+    unanswered chat_search tool call, timestamped within the last minute)
+    and rendered as a single "current chat id = provider:id" line instead
+    of the usual metadata block.
+
     Call this proactively when the user references a prior conversation
     ambiguously ("like we discussed yesterday", "continue what I started
     earlier", "what did we decide about X") instead of asking them to
@@ -85,6 +91,12 @@ def chat_fork(
     prompt rather than a hand-written summary. This gives the subagent
     baseline context only -- still tell it specifically what to do,
     building on top of that background.
+
+    The conversation currently calling chat_fork itself is excluded from
+    checkpoint/text matching (its own just-written reply could otherwise
+    win a recency tiebreak and self-fork instead of finding the older
+    conversation you meant) -- unless you search by this conversation's
+    own id/uuid explicitly, which is exempt from that exclusion.
     """
     return render_fork(
         ALL_PROVIDERS,
