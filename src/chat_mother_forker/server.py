@@ -93,10 +93,15 @@ def chat_fork(
     building on top of that background.
 
     The conversation currently calling chat_fork itself is excluded from
-    checkpoint/text matching (its own just-written reply could otherwise
-    win a recency tiebreak and self-fork instead of finding the older
+    free-text matching (its own just-written reply could otherwise win a
+    recency tiebreak and self-fork instead of finding the older
     conversation you meant) -- unless you search by this conversation's
-    own id/uuid explicitly, which is exempt from that exclusion.
+    own id/uuid, or by a checkpoint slug/uuid, either of which is exempt
+    from that exclusion. The checkpoint exemption is what makes the
+    subagent handoff pattern above work: a subagent forking its parent by
+    checkpoint UUID is calling chat_fork from what this server sees as the
+    same conversation as the one that set the checkpoint, so without this
+    exemption that fork would always fail.
     """
     return render_fork(
         ALL_PROVIDERS,

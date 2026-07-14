@@ -392,7 +392,12 @@ def test_search_conversations_not_current_when_last_message_is_not_chat_search_c
     assert results[0].is_current is False
 
 
-def test_search_conversations_not_current_when_tool_result_already_present(fake_provider):
+def test_search_conversations_current_when_tool_result_already_present_for_own_tool(fake_provider):
+    """A TOOL_RESULT immediately following a TOOL_CALL to one of our own
+    tools is treated as current (not dismissed) -- this is what an
+    atomic-write provider's just-returned call looks like on disk. See
+    current_chat.py's module docstring for the full rationale.
+    """
     fake_provider.add(
         "c1",
         mtime=time.time(),
@@ -404,8 +409,8 @@ def test_search_conversations_not_current_when_tool_result_already_present(fake_
     )
 
     results = search_conversations([fake_provider], search=None)
-    assert results.current is None
-    assert results[0].is_current is False
+    assert results.current is not None
+    assert results.current.conversation_id == "c1"
 
 
 def test_search_conversations_not_current_when_too_old(fake_provider):
@@ -488,6 +493,44 @@ def test_render_search_results_current_chat_not_counted_in_total(fake_provider):
 
     assert lines[0] == "current chat id = fake:current-convo"
     assert lines[1] == "5 conversation(s):"
+
+
+def test_search_conversations_flags_current_chat_for_atomically_flushed_result(fake_provider):
+    """Providers that flush a tool_call and its tool_result together
+    (e.g. kiro_ide_v2, claude_code) never have an unanswered call on
+    disk -- current-chat detection must still catch this via the
+    TOOL_RESULT-preceded-by-our-own-TOOL_CALL case.
+    """
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[
+            user("test the search"),
+            tool_call("mcp_chat_mother_forker_chat_search", text="{}"),
+            tool_result("50 conversation(s):\n..."),
+        ],
+    )
+    fake_provider.add("other-convo", mtime=time.time(), messages=[user("hi")])
+
+    results = search_conversations([fake_provider], search=None)
+    assert results.current is not None
+    assert results.current.conversation_id == "current-convo"
+    assert [r.conversation_id for r in results.others] == ["other-convo"]
+
+
+def test_search_conversations_not_current_for_atomically_flushed_unrelated_tool(fake_provider):
+    """A newest conversation whose flushed call+result pair is for an
+    unrelated tool (not one of our own) must not be flagged current.
+    """
+    fake_provider.add(
+        "c1",
+        mtime=time.time(),
+        messages=[user("hi"), tool_call("grep_search", text="{}"), tool_result("results")],
+    )
+
+    results = search_conversations([fake_provider], search=None)
+    assert results.current is None
+    assert results[0].is_current is False
 
 
 def test_render_search_results_current_chat_with_zero_other_matches(fake_provider):

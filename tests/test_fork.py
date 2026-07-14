@@ -276,6 +276,31 @@ def test_find_newest_match_current_conversation_still_matches_by_explicit_id(fak
     assert match.ref.conversation_id == "current-convo"
 
 
+def test_find_newest_match_skips_current_conversation_with_atomically_flushed_result(fake_provider):
+    """Providers that flush tool_call+tool_result together (kiro_ide_v2,
+    claude_code) still get excluded from tiers 3-4 via the
+    TOOL_RESULT-preceded-by-our-own-TOOL_CALL detection.
+    """
+    fake_provider.add(
+        "older-actual-target",
+        mtime=1,
+        messages=[user("let's discuss widgets today")],
+    )
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[
+            user("What was discussed about widgets?"),
+            tool_call("mcp_chat_mother_forker_chat_fork", text='{"search":"widgets"}'),
+            tool_result("some transcript mentioning widgets"),
+        ],
+    )
+
+    match = find_newest_match([fake_provider], "widgets")
+    assert match is not None
+    assert match.ref.conversation_id == "older-actual-target"
+
+
 def test_find_newest_match_current_conversation_with_no_other_match_returns_none(fake_provider):
     fake_provider.add(
         "current-convo",
@@ -287,3 +312,85 @@ def test_find_newest_match_current_conversation_with_no_other_match_returns_none
     )
 
     assert find_newest_match([fake_provider], "widgets") is None
+
+
+def test_find_newest_match_checkpoint_tier_exempt_from_current_conversation_exclusion(fake_provider):
+    """Critical subagent-handoff case: a checkpoint set moments ago in
+    what this server now considers the "current" conversation (e.g. right
+    before delegating to a subagent) must still be forkable by that exact
+    checkpoint slug/uuid. A subagent has no way to identify itself to this
+    server (subagent invocations aren't separate MCP sessions), so if tier
+    2 were excluded like tiers 3-4, the subagent's chat_fork(search=<uuid
+    just handed to it>) would always fail -- breaking the primary
+    documented workflow this package exists for.
+    """
+    line = format_checkpoint_line("about-to-delegate")
+    checkpoint_uuid = line.split("UUID=")[1].split(" ")[0]
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[
+            user("please delegate this to a subagent"),
+            tool_call("chat_checkpoint", text='{"slug":"about-to-delegate"}'),
+            tool_result(line),
+        ],
+    )
+
+    # Findable by slug...
+    match = find_newest_match([fake_provider], "about-to-delegate")
+    assert match is not None
+    assert match.ref.conversation_id == "current-convo"
+
+    # ...and by UUID, the form actually handed to a subagent in practice.
+    match_by_uuid = find_newest_match([fake_provider], checkpoint_uuid)
+    assert match_by_uuid is not None
+    assert match_by_uuid.ref.conversation_id == "current-convo"
+
+
+def test_find_newest_match_checkpoint_tier_exempt_even_for_atomically_flushed_provider(fake_provider):
+    """Same exemption, but for the atomically-flushed-result shape of
+    current-conversation detection (kiro_ide_v2/claude_code) rather than
+    the unanswered-tool-call shape.
+    """
+    checkpoint_line = format_checkpoint_line("about-to-delegate-v2")
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[
+            user("please delegate this to a subagent"),
+            tool_call("mcp_chat_mother_forker_chat_checkpoint", text='{"slug":"about-to-delegate-v2"}'),
+            tool_result(checkpoint_line),
+        ],
+    )
+
+    match = find_newest_match([fake_provider], "about-to-delegate-v2")
+    assert match is not None
+    assert match.ref.conversation_id == "current-convo"
+
+
+def test_find_newest_match_checkpoint_tier_still_beats_text_tier_when_current(fake_provider):
+    """Tier priority still holds when the current-conversation checkpoint
+    exemption is in play: an older conversation's checkpoint match must
+    not accidentally lose to the current conversation's own text -- and
+    conversely, the current conversation's *own* checkpoint match (tier 2)
+    must still outrank another conversation's mere text mention (tier 4).
+    """
+    line = format_checkpoint_line("landmark-slug")
+    fake_provider.add(
+        "current-convo",
+        mtime=time.time(),
+        messages=[
+            user("checkpoint before delegating"),
+            tool_call("chat_checkpoint", text='{"slug":"landmark-slug"}'),
+            tool_result(line),
+        ],
+    )
+    fake_provider.add(
+        "older-text-mention",
+        mtime=1,
+        messages=[assistant("landmark-slug was mentioned here in passing")],
+    )
+
+    match = find_newest_match([fake_provider], "landmark-slug")
+    assert match is not None
+    assert match.ref.conversation_id == "current-convo"

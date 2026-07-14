@@ -66,11 +66,6 @@ def _split_current(results: list[SearchResult], max_others: int) -> SearchResult
     """Pick at most one `current` result out of `results` (already in
     recency order), demoting any further is_current matches to a normal
     "other" result rather than flagging more than one.
-
-    Fallback: if no result was flagged via the strong heuristic, treat the
-    newest result (first in list) as current if it's recent enough. This
-    covers providers like Claude Code that flush tool call + result
-    atomically, so an unanswered call never exists on disk.
     """
     current: Optional[SearchResult] = None
     others: list[SearchResult] = []

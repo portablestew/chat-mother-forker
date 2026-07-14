@@ -18,14 +18,27 @@ conversation from polluting results.
 Within each tier, the newest conversation wins.
 
 The conversation currently invoking chat_fork itself (see
-`current_chat.is_current_conversation`) is excluded from tiers 2-4:
-its own just-written prose is often the *newest* text containing whatever
-term the user searched for (e.g. this very reply discussing a search term),
-which would otherwise win a same-tier recency tiebreak and self-fork
-instead of finding the older conversation the user actually meant. Tier 1
-(an explicit conversation id/uuid reference) is exempt from this exclusion,
-since a user who names this conversation's id/uuid outright is presumably
-doing so on purpose (e.g. testing chat_fork against itself).
+`current_chat.is_current_conversation`) is excluded from tiers 3-4
+(free-text search): its own just-written prose is often the *newest* text
+containing whatever term the user searched for (e.g. this very reply
+discussing a search term), which would otherwise win a same-tier recency
+tiebreak and self-fork instead of finding the older conversation the user
+actually meant.
+
+Tiers 1 (conversation id) and 2 (checkpoint) are exempt from that
+exclusion. Tier 1 is exempt because a user who names this conversation's
+id/uuid outright is presumably doing so on purpose. Tier 2 is exempt for a
+different reason: `find_checkpoints` only ever matches the literal
+"CHAT CHECKPOINT UUID=... SLUG=..." line inside a TOOL_RESULT, never free
+prose -- so a checkpoint match against the current conversation is never
+an accidental collision, it means that exact `chat_checkpoint` call
+happened here. That's also the primary documented workflow this whole
+package exists for: checkpoint before delegating to a subagent, then pass
+the UUID so the subagent can `chat_fork` the parent conversation's
+truncated view. Since a subagent has no way to identify itself to this
+MCP server (subagent invocations aren't separate MCP clients or sessions
+-- see `current_chat.py`), excluding tier 2 here would make that primary
+workflow permanently unusable rather than just occasionally wrong.
 """
 
 from __future__ import annotations
@@ -60,22 +73,27 @@ def _match_tier(
 ) -> _MatchTier:
     """Determine the highest-priority tier at which `needle` matches.
 
-    `is_current` conversations skip tiers 2-4 (checkpoint/user-prompt/
-    assistant-text matching) -- see module docstring -- but remain eligible
-    for tier 1, since an explicit id/uuid reference is presumably deliberate.
+    `is_current` conversations skip tiers 3-4 (free-text matching) -- see
+    module docstring -- but remain eligible for tiers 1 and 2, since an
+    explicit id/uuid reference or a genuine checkpoint match can't be an
+    accidental self-match.
     """
     # Tier 1: conversation ID (bare or composite provider:id)
     composite_id = f"{provider_name}:{conversation_id}".lower()
     if needle in conversation_id.lower() or needle in composite_id:
         return _MatchTier.CONVERSATION_ID
 
-    if is_current:
-        return _MatchTier.NO_MATCH
-
-    # Tier 2: checkpoint slug or uuid
+    # Tier 2: checkpoint slug or uuid -- exempt from the is_current
+    # exclusion (see module docstring): this is the primary subagent
+    # handoff workflow (checkpoint the parent, pass the UUID to the
+    # subagent, subagent forks the parent by that UUID), and a subagent
+    # has no way to identify itself to skip that exclusion otherwise.
     for cp in find_checkpoints(conversation):
         if needle in cp.slug.lower() or needle in cp.uuid.lower():
             return _MatchTier.CHECKPOINT
+
+    if is_current:
+        return _MatchTier.NO_MATCH
 
     # Tier 3: user prompt text only
     for m in conversation.messages:
