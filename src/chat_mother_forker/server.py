@@ -4,17 +4,17 @@ from __future__ import annotations
 
 from typing import Optional
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from chat_mother_forker.checkpoint import format_checkpoint_line
 from chat_mother_forker.fork import render_fork
 from chat_mother_forker.providers import ALL_PROVIDERS
 from chat_mother_forker.search import render_search_results, search_conversations
 
-mcp = FastMCP("chat-mother-forker")
+mcp_server = MCPServer("chat-mother-forker")
 
 
-@mcp.tool()
+@mcp_server.tool()
 def chat_search(search: Optional[str] = None) -> str:
     """List the most recent conversations across every configured chat-history
     provider, merged and sorted by recency. If `search` is given, only
@@ -49,7 +49,7 @@ def chat_search(search: Optional[str] = None) -> str:
     return render_search_results(results, search)
 
 
-@mcp.tool()
+@mcp_server.tool()
 def chat_checkpoint(slug: str) -> str:
     """Create a checkpoint in the current conversation so it can be found and
     sliced later via chat_search/chat_fork.
@@ -68,7 +68,7 @@ def chat_checkpoint(slug: str) -> str:
     return format_checkpoint_line(slug)
 
 
-@mcp.tool()
+@mcp_server.tool()
 def chat_fork(
     search: str,
     start_checkpoint: Optional[str] = None,
@@ -112,7 +112,7 @@ def chat_fork(
 
 
 def main() -> None:
-    mcp.run()
+    mcp_server.run()
 
 
 if __name__ == "__main__":
