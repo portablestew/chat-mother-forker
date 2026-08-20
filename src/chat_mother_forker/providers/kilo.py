@@ -153,6 +153,9 @@ class KiloProvider(ChatProvider):
         messages = _trim_before_first_user(messages)
         return Conversation(ref=ref, messages=messages, project=project)
 
+    def conversation_metadata(self, ref: ConversationRef) -> tuple[Optional[str], Optional[str]]:
+        return str(self._db_path), ref.locator
+
     @staticmethod
     def _to_messages(part: dict, role_str: Optional[str]) -> list[Message]:
         """Convert one Kilo part into zero or more normalized Messages."""

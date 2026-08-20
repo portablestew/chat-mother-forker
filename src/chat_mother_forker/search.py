@@ -93,6 +93,14 @@ class SearchResult:
     # Raw filesystem path to the conversation file, for direct grep/inspection.
     # This is the provider's `locator` field (file path for file-based providers).
     file_path: Optional[str] = None
+    # Storage location identifier (e.g. SQLite database path) for providers
+    # whose conversations aren't individual files. Populated together with
+    # `session`. When set, displayed instead of `file_path`. None for
+    # file-backed providers.
+    database: Optional[str] = None
+    # Session identifier within a database-backed store (e.g. the session
+    # table row id). Meaningful only when `database` is also set.
+    session: Optional[str] = None
     # Total number of parsed messages (user + assistant + tool_call + tool_result).
     # Useful for judging conversation depth/richness before forking.
     message_count: int = 0
@@ -210,6 +218,7 @@ def search_conversations(
             if not matched_in and not is_current:
                 continue
 
+        db_path, session_id = provider.conversation_metadata(ref)
         results.append(
             SearchResult(
                 provider=ref.provider,
@@ -218,7 +227,9 @@ def search_conversations(
                 preview=truncate_preview(conversation.first_user_text(), MAX_PREVIEW_CHARS),
                 checkpoints=checkpoints,
                 project=conversation.project,
-                file_path=ref.locator,
+                file_path=None if db_path else ref.locator,
+                database=db_path,
+                session=session_id,
                 message_count=len(conversation.messages),
                 matched_in=matched_in,
                 transcript_hit_count=transcript_matches.hit_count,
@@ -278,7 +289,10 @@ def render_search_results(results: SearchResults, search: Optional[str]) -> str:
         lines.append(f"- {r.date} | {r.provider}:{r.conversation_id}{project_suffix}")
         lines.append(f"  prompt: {r.preview or '(empty)'}")
         lines.append(f"  messages: {r.message_count}")
-        if r.file_path:
+        if r.database:
+            lines.append(f"  database: {r.database}")
+            lines.append(f"  session: {r.session}")
+        elif r.file_path:
             lines.append(f"  file: {r.file_path}")
         if r.checkpoints:
             slugs = ", ".join(f"{cp.slug} (UUID={cp.uuid})" for cp in r.checkpoints)

@@ -52,3 +52,17 @@ class ChatProvider(ABC):
         return it as a normalized `Conversation`.
         """
         raise NotImplementedError
+
+    def conversation_metadata(self, ref: ConversationRef) -> tuple[Optional[str], Optional[str]]:
+        """Return ``(database, session)`` metadata for this conversation.
+
+        ``database`` is a storage location identifier (e.g. a SQLite database
+        path) for providers whose conversations are not individual files.
+        ``session`` is the session identifier within that store (e.g. the
+        session table row id).
+
+        Both are None for file-backed providers (the default). Displayed by
+        ``chat_search`` and ``chat_fork`` in place of the generic ``file:``
+        line when ``database`` is set.
+        """
+        return None, None

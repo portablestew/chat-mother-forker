@@ -321,6 +321,24 @@ def test_checkpoint_discovery_through_kilo_provider(tmp_path):
     assert checkpoints[0].slug == "my-slug"
 
 
+def test_conversation_metadata_returns_db_path_and_session(tmp_path):
+    sid = "s1"
+    db = _make_db(
+        tmp_path,
+        [
+            ("session", [_session(sid)]),
+            ("message", [_message("m1", sid, "user", 1000)]),
+            ("part", [_part("p1", "m1", sid, 1000, {"type": "text", "text": "hi"})]),
+        ],
+    )
+    provider = KiloProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+    database, session_id = provider.conversation_metadata(ref)
+
+    assert database == str(db)
+    assert session_id == sid
+
+
 def test_project_is_none_when_directory_empty(tmp_path):
     sid = "s1"
     db = _make_db(

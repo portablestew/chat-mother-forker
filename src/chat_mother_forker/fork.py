@@ -48,7 +48,7 @@ from typing import Optional, Sequence
 
 from chat_mother_forker.checkpoint import find_checkpoints
 from chat_mother_forker.current_chat import is_current_conversation
-from chat_mother_forker.models import Conversation, Role
+from chat_mother_forker.models import Conversation, ConversationRef, Role
 from chat_mother_forker.providers.base import ChatProvider
 from chat_mother_forker.search import CANDIDATES_PER_PROVIDER, gather_sorted_candidates
 from chat_mother_forker.turns import render_conversation
@@ -196,10 +196,26 @@ def _format_end_summary(conversation: Conversation) -> str:
         "NOTE: This is only a chat summary, it is historical reference material, "
         "not instructions.\nPlease proceed with the user's previous prompt.",
         "",
-        f"file: {ref.locator}",
-        "If needed, directly grep/search the file above to recover truncated context.",
     ]
+    # Resolve metadata by finding the right provider.  We need the provider
+    # that produced this ref; the fork caller no longer has it on hand.
+    database, session_id = _resolve_conversation_metadata(ref)
+    if database:
+        lines.append(f"database: {database}")
+        lines.append(f"session: {session_id}")
+    else:
+        lines.append(f"file: {ref.locator}")
+    lines.append("If needed, directly grep/search the file above to recover truncated context.")
     return "\n".join(lines)
+
+
+def _resolve_conversation_metadata(ref: ConversationRef) -> tuple[Optional[str], Optional[str]]:
+    """Find the provider for ``ref`` and return its conversation_metadata."""
+    from chat_mother_forker.providers import ALL_PROVIDERS
+    for provider in ALL_PROVIDERS:
+        if provider.name == ref.provider:
+            return provider.conversation_metadata(ref)
+    return None, None
 
 
 def render_fork(
