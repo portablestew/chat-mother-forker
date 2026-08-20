@@ -9,6 +9,7 @@ from __future__ import annotations
 from chat_mother_forker.providers.base import ChatProvider
 from chat_mother_forker.providers.claude_code import ClaudeCodeProvider
 from chat_mother_forker.providers.cline import ClineProvider
+from chat_mother_forker.providers.kilo import KiloProvider
 from chat_mother_forker.providers.kiro_cli import KiroCliProvider
 from chat_mother_forker.providers.kiro_ide import KiroIdeProvider
 from chat_mother_forker.providers.kiro_ide_v2 import KiroIdeV2Provider
@@ -29,6 +30,7 @@ ALL_PROVIDERS: list[ChatProvider] = [
     KiroIdeV2Provider(),
     ClaudeCodeProvider(),
     ClineProvider(),
+    KiloProvider(),
 ]
 
 __all__ = ["ChatProvider", "ALL_PROVIDERS"]
