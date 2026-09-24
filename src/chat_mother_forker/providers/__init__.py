@@ -13,6 +13,7 @@ from chat_mother_forker.providers.kilo import KiloProvider
 from chat_mother_forker.providers.kiro_cli import KiroCliProvider
 from chat_mother_forker.providers.kiro_ide import KiroIdeProvider
 from chat_mother_forker.providers.kiro_ide_v2 import KiroIdeV2Provider
+from chat_mother_forker.providers.opencode import OpenCodeProvider
 from chat_mother_forker.search import CANDIDATES_PER_PROVIDER
 
 ALL_PROVIDERS: list[ChatProvider] = [
@@ -31,6 +32,9 @@ ALL_PROVIDERS: list[ChatProvider] = [
     ClaudeCodeProvider(),
     ClineProvider(),
     KiloProvider(),
+    # SQLite DB: push the recency cut into SQL (exact -- same ordering key
+    # callers use) so list_candidates never materializes every session row.
+    OpenCodeProvider(max_sessions=CANDIDATES_PER_PROVIDER),
 ]
 
 __all__ = ["ChatProvider", "ALL_PROVIDERS"]

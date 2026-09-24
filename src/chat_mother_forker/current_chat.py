@@ -12,6 +12,9 @@ into the string it hands the model:
     kiro_cli / kiro_ide (v1) -> "chat_search"                          (bare)
     kiro_ide_v2            -> "mcp_chat_mother_forker_chat_search"    (single underscore)
     claude_code            -> "mcp__chat-mother-forker__chat_search"  (double underscore)
+    opencode               -> "chat_search" (tool parts store the bare
+                              `tool` name; MCP prefixing, if any, is
+                              handled by the same prefix-tolerant matcher)
 
 So matching against `OWN_TOOL_NAMES` can't be an exact-equality check --
 it has to tolerate an arbitrary `<prefix>_<tool_name>` wrapper. See
@@ -21,13 +24,14 @@ Providers also differ in *when* a tool_call's response lands on disk.
 Some (the original `kiro_ide` execution-log format, `kiro_cli`) write the
 call first and only backfill the result once the tool returns, so mid-call
 the transcript genuinely ends on an *unanswered* TOOL_CALL -- that's the
-primary heuristic below. Others (`kiro_ide_v2`, `claude_code`) flush a
-tool_call and its tool_result to disk together, same millisecond
-timestamp -- an unanswered call never exists on disk for the primary
-heuristic to catch. For those, `is_current_conversation` also accepts the
-transcript ending on a TOOL_RESULT whose *immediately preceding* message
-is a TOOL_CALL to one of our own tools (i.e. the call+response pair that
-was just flushed as this very invocation returns).
+primary heuristic below. Others (`kiro_ide_v2`, `claude_code`, `opencode`)
+flush a tool_call and its tool_result to disk together (OpenCode stores
+both on a single `tool` part, split into a call+result pair at load time) --
+an unanswered call never exists on disk for the primary heuristic to catch.
+For those, `is_current_conversation` also accepts the transcript ending on
+a TOOL_RESULT whose *immediately preceding* message is a TOOL_CALL to one
+of our own tools (i.e. the call+response pair that was just flushed as this
+very invocation returns).
 """
 
 from __future__ import annotations

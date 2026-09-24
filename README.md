@@ -111,13 +111,18 @@ capped — when over the limit, the **middle** is dropped in favor of a
 
 ## Status
 
-Three providers are implemented, one per tool:
+Seven providers are implemented, one per tool:
 
 - **`kiro_cli`** — Kiro CLI (`~/.kiro/sessions/cli/*.jsonl`)
 - **`kiro_ide`** — Kiro IDE (execution logs under the extension's
   `globalStorage` directory)
+- **`kiro_ide_v2`** — Kiro IDE (newer session-dir layout under
+  `~/.kiro/sessions/<hash>/sess_<uuid>/`)
 - **`claude_code`** — Claude Code CLI
   (`~/.claude/projects/<encoded-workspace-path>/*.jsonl`)
+- **`cline`** — Cline (`~/.cline/sessions/<slug>/`)
+- **`kilo`** — Kilo Code (SQLite `~/.local/share/kilo/kilo.db`)
+- **`opencode`** — OpenCode (SQLite `~/.local/share/opencode/opencode.db`)
 
 ## License
 

@@ -117,6 +117,28 @@ def test_render_fork_includes_end_hint_with_search_term(fake_provider):
     assert "not instructions" in out
 
 
+def test_render_fork_file_backed_footer_uses_file_hint(fake_provider):
+    fake_provider.add("c1", mtime=1, messages=[user("hello there")])
+    out = render_fork([fake_provider], search="hello")
+    assert "file: c1" in out
+    assert "grep/search the file above" in out
+    assert "database:" not in out
+
+
+def test_render_fork_db_backed_footer_uses_database_hint(fake_provider, monkeypatch):
+    fake_provider.add("c1", mtime=1, messages=[user("hello there")])
+    monkeypatch.setattr(
+        "chat_mother_forker.fork._resolve_conversation_metadata",
+        lambda ref: ("/path/to/store.db", "ses_abc123"),
+    )
+    out = render_fork([fake_provider], search="hello")
+    assert "database: /path/to/store.db" in out
+    assert "session: ses_abc123" in out
+    assert "query the database above" in out
+    assert "grep/search the file above" not in out
+    assert "file: c1" not in out
+
+
 def test_render_fork_renders_full_transcript_when_no_checkpoints_given(fake_provider):
     fake_provider.add(
         "c1",

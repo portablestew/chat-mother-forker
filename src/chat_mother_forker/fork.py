@@ -203,9 +203,15 @@ def _format_end_summary(conversation: Conversation) -> str:
     if database:
         lines.append(f"database: {database}")
         lines.append(f"session: {session_id}")
+        lines.append(
+            "If needed, query the database above (by the session id) to recover "
+            "truncated context."
+        )
     else:
         lines.append(f"file: {ref.locator}")
-    lines.append("If needed, directly grep/search the file above to recover truncated context.")
+        lines.append(
+            "If needed, directly grep/search the file above to recover truncated context."
+        )
     return "\n".join(lines)
 
 
