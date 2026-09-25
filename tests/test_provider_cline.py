@@ -329,3 +329,30 @@ def test_load_project_is_none_when_no_cwd_or_workspace_root(tmp_path):
     conv = provider.load(ref)
 
     assert conv.project is None
+
+
+# --- conversation_size ---
+
+
+def test_conversation_size_returns_messages_file_size(tmp_path):
+    meta = {"workspace_root": "C:\\Dev\\github\\proj", "title": "S"}
+    session_dir = _write_session(tmp_path, "session-1", meta, [_user("hello there")])
+    provider = ClineProvider(cline_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+
+    expected = os.path.getsize(session_dir / "session-1.messages.json")
+    assert provider.conversation_size(ref) == expected
+    assert provider.conversation_size(ref) > 0
+
+
+def test_conversation_size_zero_when_messages_file_missing(tmp_path):
+    from chat_mother_forker.models import ConversationRef
+
+    provider = ClineProvider(cline_home=tmp_path)
+    ref = ConversationRef(
+        provider="cline",
+        conversation_id="gone",
+        locator=str(tmp_path / "no_such_dir"),
+        mtime=0.0,
+    )
+    assert provider.conversation_size(ref) == 0

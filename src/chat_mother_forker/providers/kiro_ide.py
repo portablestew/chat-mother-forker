@@ -276,6 +276,20 @@ class KiroIdeProvider(ChatProvider):
         messages = _trim_before_first_user(messages)
         return Conversation(ref=ref, messages=messages, project=project)
 
+    def conversation_size(self, ref: ConversationRef) -> int:
+        """Size of the execution-log file `ref.locator` points at.
+
+        `ref.locator` is the *latest* execution log for the session (one
+        per turn), which carries the full prior `context.messages` plus this
+        turn's actions -- so its size tracks total conversation size closely,
+        even though earlier turns each have their own (smaller) exec-log file
+        this doesn't count.
+        """
+        try:
+            return os.path.getsize(ref.locator)
+        except OSError:
+            return 0
+
     def _stitch_running_execution(
         self, running_data: dict, session_id: str
     ) -> tuple[list[Message], Optional[str]]:

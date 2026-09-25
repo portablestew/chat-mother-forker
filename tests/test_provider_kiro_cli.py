@@ -463,3 +463,28 @@ def test_load_project_is_none_when_sidecar_metadata_malformed(tmp_path):
     conversation = provider.load(ref)
 
     assert conversation.project is None
+
+
+# --- conversation_size ---
+
+
+def test_conversation_size_returns_jsonl_file_size(tmp_path):
+    jsonl_path = _write_session(tmp_path, "s1", [_prompt("hello there")])
+    provider = KiroCliProvider(kiro_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+
+    assert provider.conversation_size(ref) == os.path.getsize(jsonl_path)
+    assert provider.conversation_size(ref) > 0
+
+
+def test_conversation_size_zero_when_file_missing(tmp_path):
+    from chat_mother_forker.models import ConversationRef
+
+    provider = KiroCliProvider(kiro_home=tmp_path)
+    ref = ConversationRef(
+        provider="kiro_cli",
+        conversation_id="gone",
+        locator=str(tmp_path / "nope.jsonl"),
+        mtime=0.0,
+    )
+    assert provider.conversation_size(ref) == 0

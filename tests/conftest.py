@@ -44,6 +44,7 @@ class FakeProvider(ChatProvider):
     def __init__(self, name: str = "fake"):
         self.name = name
         self._conversations: dict[str, tuple[float, list[Message], Optional[str]]] = {}
+        self._sizes: dict[str, int] = {}
 
     def add(
         self,
@@ -51,8 +52,11 @@ class FakeProvider(ChatProvider):
         mtime: float,
         messages: list[Message],
         project: Optional[str] = None,
+        size_bytes: Optional[int] = None,
     ) -> None:
         self._conversations[conversation_id] = (mtime, messages, project)
+        if size_bytes is not None:
+            self._sizes[conversation_id] = size_bytes
 
     def list_candidates(self) -> Iterable[ConversationRef]:
         return [
@@ -68,6 +72,13 @@ class FakeProvider(ChatProvider):
     def load(self, ref: ConversationRef) -> Conversation:
         _mtime, messages, project = self._conversations[ref.conversation_id]
         return Conversation(ref=ref, messages=list(messages), project=project)
+
+    def conversation_size(self, ref: ConversationRef) -> int:
+        cid = ref.conversation_id
+        if cid in self._sizes:
+            return self._sizes[cid]
+        _mtime, messages, _project = self._conversations[cid]
+        return sum(len(m.text.encode("utf-8")) for m in messages)
 
 
 @pytest.fixture

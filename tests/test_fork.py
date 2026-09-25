@@ -129,7 +129,7 @@ def test_render_fork_db_backed_footer_uses_database_hint(fake_provider, monkeypa
     fake_provider.add("c1", mtime=1, messages=[user("hello there")])
     monkeypatch.setattr(
         "chat_mother_forker.fork._resolve_conversation_metadata",
-        lambda ref: ("/path/to/store.db", "ses_abc123"),
+        lambda providers, ref: ("/path/to/store.db", "ses_abc123"),
     )
     out = render_fork([fake_provider], search="hello")
     assert "database: /path/to/store.db" in out

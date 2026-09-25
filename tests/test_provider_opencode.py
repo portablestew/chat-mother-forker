@@ -446,3 +446,72 @@ def test_project_is_none_when_directory_empty(tmp_path):
     conv = provider.load(ref)
 
     assert conv.project is None
+
+
+# --- conversation_size ---
+
+
+def test_conversation_size_sums_message_and_part_data_bytes(tmp_path):
+    sid = "ses_1"
+    msg_rows = [_message("msg_1", sid, "user", 1000), _message("msg_2", sid, "assistant", 2000)]
+    part_rows = [
+        _part("prt_1", "msg_1", sid, 1000, {"type": "text", "text": "hello there"}),
+        _part("prt_2", "msg_2", sid, 2000, {"type": "text", "text": "hi back"}),
+    ]
+    db = _make_db(
+        tmp_path,
+        [("session", [_session(sid)]), ("message", msg_rows), ("part", part_rows)],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+
+    expected = sum(len(r["data"].encode("utf-8")) for r in msg_rows + part_rows)
+    assert provider.conversation_size(ref) == expected
+    assert provider.conversation_size(ref) > 0
+
+
+def test_conversation_size_counts_bytes_not_chars_for_multibyte(tmp_path):
+    """`CAST(data AS BLOB)` must make LENGTH count bytes, not characters.
+
+    Insert a `data` value with raw (non-escaped) multibyte characters so its
+    UTF-8 byte length exceeds its character length; the reported size must
+    match the byte length.
+    """
+    sid = "ses_1"
+    raw_multibyte = '{"type":"text","text":"caf\u00e9 \u2603 \U0001f600"}'
+    part_rows = [
+        {
+            "id": "prt_1",
+            "message_id": "msg_1",
+            "session_id": sid,
+            "time_created": 1000,
+            "time_updated": 1000,
+            "data": raw_multibyte,
+        }
+    ]
+    db = _make_db(
+        tmp_path,
+        [
+            ("session", [_session(sid)]),
+            ("message", [_message("msg_1", sid, "user", 1000)]),
+            ("part", part_rows),
+        ],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+
+    byte_len = len(raw_multibyte.encode("utf-8"))
+    char_len = len(raw_multibyte)
+    assert byte_len > char_len  # the multibyte chars really do expand
+    message_bytes = len(_message("msg_1", sid, "user", 1000)["data"].encode("utf-8"))
+    assert provider.conversation_size(ref) == byte_len + message_bytes
+
+
+def test_conversation_size_zero_when_db_missing(tmp_path):
+    from chat_mother_forker.models import ConversationRef
+
+    provider = OpenCodeProvider(db_path=tmp_path / "missing.db")
+    ref = ConversationRef(
+        provider="opencode", conversation_id="ses_x", locator="ses_x", mtime=0.0
+    )
+    assert provider.conversation_size(ref) == 0

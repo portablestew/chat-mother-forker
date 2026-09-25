@@ -109,6 +109,13 @@ class KiroCliProvider(ChatProvider):
         project = self._load_project(jsonl_path)
         return Conversation(ref=ref, messages=messages, project=project)
 
+    def conversation_size(self, ref: ConversationRef) -> int:
+        """Size of the `.jsonl` transcript file (`ref.locator`)."""
+        try:
+            return os.path.getsize(ref.locator)
+        except OSError:
+            return 0
+
     @staticmethod
     def _load_project(jsonl_path: Path) -> Optional[str]:
         """Best-effort project name from the sidecar `<uuid>.json` metadata

@@ -849,3 +849,31 @@ class TestProjectExtraction:
 
         conv = provider.load(refs[0])
         assert conv.project == "chat-mother-forker"
+
+
+# --- conversation_size ---
+
+
+def test_conversation_size_returns_execution_log_file_size(tmp_path):
+    exec_dir = _make_workspace_hash(tmp_path)
+    data = _minimal_execution(session_id="session-1", start_time=1700000000000)
+    exec_path = _write_execution(exec_dir, "exec-1.json", data)
+
+    provider = KiroIdeProvider(storage_root=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+
+    assert provider.conversation_size(ref) == os.path.getsize(exec_path)
+    assert provider.conversation_size(ref) > 0
+
+
+def test_conversation_size_zero_when_file_missing(tmp_path):
+    from chat_mother_forker.models import ConversationRef
+
+    provider = KiroIdeProvider(storage_root=tmp_path)
+    ref = ConversationRef(
+        provider="kiro_ide",
+        conversation_id="gone",
+        locator=str(tmp_path / "nope.json"),
+        mtime=0.0,
+    )
+    assert provider.conversation_size(ref) == 0

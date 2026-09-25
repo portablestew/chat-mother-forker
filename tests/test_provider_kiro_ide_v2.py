@@ -409,3 +409,31 @@ def test_two_provider_instances_can_represent_different_homes(tmp_path):
         "bbbbbbbb-2222-2222-2222-222222222222",
         "aaaaaaaa-1111-1111-1111-111111111111",
     ]
+
+
+# --- conversation_size ---
+
+
+def test_conversation_size_returns_messages_jsonl_size(tmp_path):
+    session_dir = _write_session(
+        tmp_path, "a" * 32, "uuid-1", [_user("hello there"), _assistant("hi")]
+    )
+    provider = KiroIdeV2Provider(kiro_home=tmp_path)
+    ref = next(iter(provider.list_candidates()))
+
+    expected = os.path.getsize(session_dir / "messages.jsonl")
+    assert provider.conversation_size(ref) == expected
+    assert provider.conversation_size(ref) > 0
+
+
+def test_conversation_size_zero_when_messages_file_missing(tmp_path):
+    from chat_mother_forker.models import ConversationRef
+
+    provider = KiroIdeV2Provider(kiro_home=tmp_path)
+    ref = ConversationRef(
+        provider="kiro_ide_v2",
+        conversation_id="gone",
+        locator=str(tmp_path / "no_such_dir"),
+        mtime=0.0,
+    )
+    assert provider.conversation_size(ref) == 0

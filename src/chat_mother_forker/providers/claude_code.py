@@ -150,6 +150,13 @@ class ClaudeCodeProvider(ChatProvider):
         messages = _trim_before_first_user(messages)
         return Conversation(ref=ref, messages=messages, project=project)
 
+    def conversation_size(self, ref: ConversationRef) -> int:
+        """Size of the `.jsonl` transcript file (`ref.locator`)."""
+        try:
+            return os.path.getsize(ref.locator)
+        except OSError:
+            return 0
+
     @staticmethod
     def _to_messages(event: dict) -> list[Message]:
         """Convert one JSONL event into zero or more Message objects."""

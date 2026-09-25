@@ -354,3 +354,33 @@ def test_project_is_none_when_directory_empty(tmp_path):
     conv = provider.load(ref)
 
     assert conv.project is None
+
+
+# --- conversation_size ---
+
+
+def test_conversation_size_sums_message_and_part_data_bytes(tmp_path):
+    sid = "s1"
+    msg_rows = [_message("m1", sid, "user", 1000), _message("m2", sid, "assistant", 2000)]
+    part_rows = [
+        _part("p1", "m1", sid, 1000, {"type": "text", "text": "hello there"}),
+        _part("p2", "m2", sid, 2000, {"type": "text", "text": "hi back"}),
+    ]
+    db = _make_db(
+        tmp_path,
+        [("session", [_session(sid)]), ("message", msg_rows), ("part", part_rows)],
+    )
+    provider = KiloProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+
+    expected = sum(len(r["data"].encode("utf-8")) for r in msg_rows + part_rows)
+    assert provider.conversation_size(ref) == expected
+    assert provider.conversation_size(ref) > 0
+
+
+def test_conversation_size_zero_when_db_missing(tmp_path):
+    from chat_mother_forker.models import ConversationRef
+
+    provider = KiloProvider(db_path=tmp_path / "missing.db")
+    ref = ConversationRef(provider="kilo", conversation_id="s_x", locator="s_x", mtime=0.0)
+    assert provider.conversation_size(ref) == 0

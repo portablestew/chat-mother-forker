@@ -24,7 +24,7 @@ Every provider must support two operations, split for performance reasons:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Iterable
+from typing import Iterable, Optional
 
 from chat_mother_forker.models import Conversation, ConversationRef
 
@@ -50,6 +50,33 @@ class ChatProvider(ABC):
         """Fully parse the conversation referenced by `ref` (which must have
         been produced by this same provider's `list_candidates()`), and
         return it as a normalized `Conversation`.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def conversation_size(self, ref: ConversationRef) -> int:
+        """Return the raw stored byte size of the conversation `ref` points at.
+
+        This is a *cheap* probe -- like `list_candidates()`, it must not
+        fully parse message bodies. Callers use it to gauge conversation
+        size (e.g. a compaction threshold) without rendering or loading the
+        transcript.
+
+        The exact meaning is provider-specific, and the number is only ever
+        compared against a threshold or used relatively -- not assumed to
+        equal a token count:
+
+        - File-backed providers return the transcript file's size on disk
+          (``os.path.getsize`` on the backing file). For providers whose
+          ``ref.locator`` is a directory, this is the size of the single
+          transcript file within it, not the whole directory.
+        - Database-backed providers return a best-effort byte estimate of
+          the session's stored content (e.g. the summed length of its
+          message/part rows), which won't match a file provider's number
+          but is monotonic with conversation length.
+
+        Returns 0 when the backing storage is missing or unreadable, mirroring
+        how `load()` degrades to an empty conversation rather than raising.
         """
         raise NotImplementedError
 

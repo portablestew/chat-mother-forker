@@ -151,6 +151,20 @@ class ClineProvider(ChatProvider):
         messages = _trim_before_first_user(messages)
         return Conversation(ref=ref, messages=messages, project=project)
 
+    def conversation_size(self, ref: ConversationRef) -> int:
+        """Size of the session's `<id>.messages.json` transcript file.
+
+        `ref.locator` is the session *directory* (named after the session
+        id); the transcript is `<id>.messages.json` inside it. The sidecar
+        `<id>.json` metadata file is not counted.
+        """
+        session_dir = Path(ref.locator)
+        messages_file = session_dir / f"{session_dir.name}.messages.json"
+        try:
+            return os.path.getsize(messages_file)
+        except OSError:
+            return 0
+
     @staticmethod
     def _to_messages(raw_msg: dict) -> list[Message]:
         """Convert one Cline message into zero or more normalized Message objects."""

@@ -156,6 +156,34 @@ class KiloProvider(ChatProvider):
     def conversation_metadata(self, ref: ConversationRef) -> tuple[Optional[str], Optional[str]]:
         return str(self._db_path), ref.locator
 
+    def conversation_size(self, ref: ConversationRef) -> int:
+        """Best-effort byte size of the session's stored content.
+
+        Like OpenCode, Kilo keeps everything in one shared SQLite DB, so
+        this sums the byte length of the `data` JSON across the session's
+        `message` and `part` rows -- cheap (two SQL aggregates) and
+        monotonic with conversation length, not a file-on-disk figure.
+        """
+        conn = _connect_readonly(self._db_path)
+        if conn is None:
+            return 0
+        try:
+            total = 0
+            for table in ("message", "part"):
+                # CAST to BLOB so LENGTH counts bytes, not characters.
+                row = conn.execute(
+                    f"SELECT COALESCE(SUM(LENGTH(CAST(data AS BLOB))), 0)"
+                    f" FROM {table} WHERE session_id=?",
+                    (ref.locator,),
+                ).fetchone()
+                if row and row[0]:
+                    total += int(row[0])
+            return total
+        except sqlite3.Error:
+            return 0
+        finally:
+            conn.close()
+
     @staticmethod
     def _to_messages(part: dict, role_str: Optional[str]) -> list[Message]:
         """Convert one Kilo part into zero or more normalized Messages."""

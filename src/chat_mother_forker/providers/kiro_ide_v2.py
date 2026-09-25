@@ -120,6 +120,18 @@ class KiroIdeV2Provider(ChatProvider):
         project = self._load_project(session_dir / _SESSION_METADATA_FILENAME)
         return Conversation(ref=ref, messages=messages, project=project)
 
+    def conversation_size(self, ref: ConversationRef) -> int:
+        """Size of the session's `messages.jsonl` transcript.
+
+        `ref.locator` is the session *directory*; the transcript lives in
+        `messages.jsonl` inside it (session.json/publish.cursor are
+        bookkeeping and deliberately not counted).
+        """
+        try:
+            return os.path.getsize(os.path.join(ref.locator, _MESSAGES_FILENAME))
+        except OSError:
+            return 0
+
     @staticmethod
     def _load_project(session_metadata_path: Path) -> Optional[str]:
         """Best-effort project/workspace name from `session.json`'s
