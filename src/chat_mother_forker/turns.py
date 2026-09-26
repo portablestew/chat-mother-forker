@@ -77,7 +77,7 @@ def _sub_label(message: Message) -> str:
     return label
 
 
-def render_turn(turn: Turn, max_chars: int | None = None) -> str:
+def render_turn(turn: Turn, max_chars: int | None = None, *, truncate: bool = True) -> str:
     """Render a turn's body, middle-truncated to a character budget.
 
     If `max_chars` is given explicitly, it's applied as a plain symmetric
@@ -89,6 +89,10 @@ def render_turn(turn: Turn, max_chars: int | None = None) -> str:
       tool calls) gets a bigger tail than head, since the conclusion at the
       end tends to be the most useful context to preserve.
     - Any other assistant turn gets the general `MAX_TURN_CHARS` split evenly.
+
+    With `truncate=False`, the body is returned verbatim -- no cap, no
+    middle drop. This is the path `load_chat` takes when a caller needs the
+    complete transcript rather than a size-bounded summary.
     """
     if turn.kind == _SYSTEM_MARKER_TURN:
         # A synthetic marker turn standing in for dropped turns -- rendered
@@ -98,6 +102,9 @@ def render_turn(turn: Turn, max_chars: int | None = None) -> str:
     header = f"## {turn.kind}"
     sections = [f"{_sub_label(m)}\n{_quote(m.text)}" for m in turn.messages if m.text.strip()]
     body = "\n\n".join(sections)
+
+    if not truncate:
+        return f"{header}\n{body}"
 
     if max_chars is not None:
         body = truncate_middle_text(body, max_chars)
@@ -121,6 +128,8 @@ def render_conversation(
     conversation: Conversation,
     max_turns: int = MAX_TURNS,
     max_turn_chars: int | None = None,
+    *,
+    truncate: bool = True,
 ) -> str:
     """Render a full conversation as annotated, truncated turns.
 
@@ -131,7 +140,12 @@ def render_conversation(
     `max_turn_chars`, if given, overrides the per-turn budget uniformly
     (see `render_turn`); otherwise each turn picks its own budget based on
     its kind and shape.
+
+    With `truncate=False`, every turn is rendered verbatim and the turn
+    count is uncapped -- the path `load_chat` takes when a caller wants the
+    complete transcript rather than a size-bounded summary.
     """
     turns = group_into_turns(conversation.messages)
-    turns = truncate_middle_list(turns, max_turns, _turns_dropped_marker)
-    return "\n\n".join(render_turn(t, max_turn_chars) for t in turns)
+    if truncate:
+        turns = truncate_middle_list(turns, max_turns, _turns_dropped_marker)
+    return "\n\n".join(render_turn(t, max_turn_chars, truncate=truncate) for t in turns)

@@ -1,7 +1,7 @@
 """Public library API.
 
-This is the small, stable surface intended for programmatic use (e.g. by
-backseat-harness), as opposed to the MCP server in `server.py`. Two calls:
+This is the small, stable surface intended for programmatic use, as opposed to
+the MCP server in `server.py`. Three calls:
 
 - `fork_chat(search)` -- exactly what the `chat_fork` MCP tool does: find the
   newest conversation matching `search` and return it as a single annotated,
@@ -11,6 +11,10 @@ backseat-harness), as opposed to the MCP server in `server.py`. Two calls:
   flat `ChatRef` rows (key, recency, size, checkpoints, location). Enough to
   filter/sort/decide, and each row's `key` feeds straight back into
   `fork_chat`.
+
+- `load_chat(search)` -- the untruncated twin of `fork_chat`: find the newest
+  conversation matching `search` and return its *complete* transcript, with
+  no turn cap and no middle drop. Raises `LookupError` when nothing matches.
 
 Both default to the full built-in provider set (`default_providers()`); pass
 `providers=` to scope to a subset.
@@ -22,11 +26,12 @@ from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 from chat_mother_forker.checkpoint import Checkpoint, find_checkpoints
-from chat_mother_forker.fork import render_fork
+from chat_mother_forker.fork import find_newest_match, render_fork
 from chat_mother_forker.models import Role
 from chat_mother_forker.providers import default_providers
 from chat_mother_forker.providers.base import ChatProvider
 from chat_mother_forker.search import CANDIDATES_PER_PROVIDER, gather_sorted_candidates
+from chat_mother_forker.turns import render_conversation
 
 
 @dataclass
@@ -84,6 +89,36 @@ def fork_chat(
         start_checkpoint=start_checkpoint,
         end_checkpoint=end_checkpoint,
     )
+
+
+def load_chat(
+    search: str,
+    *,
+    providers: Optional[Sequence[ChatProvider]] = None,
+) -> str:
+    """Find the newest conversation matching `search` and return its *complete*
+    transcript, untruncated.
+
+    `search` matches by the same tiered priority as `fork_chat`: conversation
+    id (bare or ``provider:id``), then checkpoint slug/uuid, then user prompt
+    text, then assistant text; newest wins within a tier. The current
+    conversation's free-text tiers are excluded (see `fork.py`), but an
+    explicit id/uuid or a checkpoint match is not.
+
+    Unlike `fork_chat`, this returns every message verbatim -- no turn cap,
+    no middle drop, no "not instructions" footer. It's a raw data API: the
+    caller owns truncation, formatting, and prompt-injection handling. The
+    transcript is still annotated (turn headers, message labels, quoted
+    text) so it reads like a conversation rather than raw log lines.
+
+    Raises `LookupError` when nothing matches `search`. `providers` defaults
+    to `default_providers()`.
+    """
+    provs = default_providers() if providers is None else providers
+    conversation = find_newest_match(provs, search)
+    if conversation is None:
+        raise LookupError(f'No conversation found matching "{search}".')
+    return render_conversation(conversation, truncate=False)
 
 
 def find_chats(

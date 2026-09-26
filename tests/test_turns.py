@@ -152,3 +152,49 @@ def test_render_conversation_caps_number_of_turns_with_middle_marker():
 def test_render_conversation_empty_messages_returns_empty_string():
     conversation = Conversation(ref=_ref(), messages=[])
     assert render_conversation(conversation) == ""
+
+
+def test_render_turn_truncate_false_returns_body_verbatim():
+    """`truncate=False` bypasses the per-turn char budget entirely -- the
+    path `load_chat` takes when a caller needs the complete transcript."""
+    turns = group_into_turns([user("x" * 500)])
+    out = render_turn(turns[0], truncate=False)
+    assert out.startswith(f"## {USER_TURN}")
+    assert "x" * 500 in out
+    assert "characters truncated" not in out
+
+
+def test_render_turn_truncate_false_overrides_max_chars():
+    """Even with an explicit `max_chars`, `truncate=False` wins."""
+    turns = group_into_turns([user("x" * 500)])
+    out = render_turn(turns[0], max_chars=50, truncate=False)
+    assert "x" * 500 in out
+
+
+def test_render_conversation_truncate_false_keeps_all_turns():
+    """`truncate=False` also uncaps the turn count, so every turn survives."""
+    messages = [user(f"u{i}") if i % 2 == 0 else assistant(f"a{i}") for i in range(60)]
+    conversation = Conversation(ref=_ref(), messages=messages)
+    rendered = render_conversation(conversation, truncate=False)
+
+    assert "turns truncated" not in rendered
+    assert "u0" in rendered
+    assert "a59" in rendered
+    assert "u30" in rendered
+
+
+def test_render_conversation_truncate_false_keeps_tool_parts():
+    """Tool calls and results render normally under truncate=False --
+    they're the whole point of an untruncated transcript."""
+    conversation = Conversation(
+        ref=_ref(),
+        messages=[
+            user("check"),
+            tool_call("bash", "pytest"),
+            tool_result("1 failed"),
+        ],
+    )
+    rendered = render_conversation(conversation, truncate=False)
+
+    assert "TOOL_CALL: bash" in rendered
+    assert "1 failed" in rendered

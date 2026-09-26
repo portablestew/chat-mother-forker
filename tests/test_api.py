@@ -1,6 +1,6 @@
 """Tests for the public library API (`fork_chat`, `find_chats`, `ChatRef`).
 
-These exercise the library surface backseat-harness depends on, using the
+These exercise the public library surface, using the
 in-memory `FakeProvider` from conftest so no filesystem/DB is touched.
 """
 
@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import time
 
-from chat_mother_forker import ChatRef, find_chats, fork_chat
+import pytest
+
+from chat_mother_forker import ChatRef, find_chats, fork_chat, load_chat
 from chat_mother_forker.api import default_providers
 from conftest import FakeProvider, assistant, tool_call, tool_result, user
 
@@ -155,3 +157,95 @@ def test_default_providers_returns_fresh_list_each_call():
     b = default_providers()
     assert a is not b
     assert [p.name for p in a] == [p.name for p in b]
+
+
+# --- load_chat ---
+
+
+def test_load_chat_returns_full_untruncated_transcript(fake_provider):
+    fake_provider.add(
+        "conv-1",
+        mtime=time.time() - 3600,
+        messages=[user("build the thing"), assistant("done building")],
+    )
+    out = load_chat("build the thing", providers=[fake_provider])
+
+    assert "## USER" in out
+    assert "build the thing" in out
+    assert "done building" in out
+    # No fork footer: load_chat is a raw data API.
+    assert "historical reference material" not in out
+    assert "END CHAT SUMMARY" not in out
+
+
+def test_load_chat_no_match_raises_lookup_error(fake_provider):
+    fake_provider.add("conv-1", mtime=time.time(), messages=[user("hello")])
+    with pytest.raises(LookupError) as exc_info:
+        load_chat("nonexistent-needle", providers=[fake_provider])
+    assert "nonexistent-needle" in str(exc_info.value)
+
+
+def test_load_chat_matches_by_composite_key(fake_provider):
+    fake_provider.add("conv-1", mtime=time.time() - 100, messages=[user("hi")])
+    out = load_chat("fake:conv-1", providers=[fake_provider])
+    assert "hi" in out
+
+
+def test_load_chat_includes_tool_calls_and_results(fake_provider):
+    """load_chat is untruncated, so tool call/result parts survive --
+    the whole point vs. fork_chat's size-bounded summary."""
+    fake_provider.add(
+        "conv-1",
+        mtime=time.time() - 10,
+        messages=[
+            user("check the tree"),
+            assistant("running git status"),
+            tool_call("bash", "git status"),
+            tool_result("On branch main\nnothing to commit, clean tree"),
+        ],
+    )
+    out = load_chat("check the tree", providers=[fake_provider])
+
+    assert "TOOL_CALL: bash" in out
+    assert "On branch main" in out
+    assert "nothing to commit, clean tree" in out
+
+
+def test_load_chat_defaults_to_default_providers(monkeypatch):
+    """When `providers` is omitted, load_chat uses default_providers()."""
+    sentinel = FakeProvider(name="sentinel")
+    sentinel.add("c1", mtime=time.time() - 10, messages=[user("marker-xyz")])
+    monkeypatch.setattr("chat_mother_forker.api.default_providers", lambda: [sentinel])
+
+    out = load_chat("marker-xyz")
+    assert "marker-xyz" in out
+
+
+def test_load_chat_does_not_truncate_very_long_turns(fake_provider):
+    """A turn longer than fork_chat's per-turn budget must come through whole."""
+    long_body = "x" * 100_000
+    fake_provider.add("conv-1", mtime=time.time() - 10, messages=[user("needle"), assistant(long_body)])
+    out = load_chat("needle", providers=[fake_provider])
+
+    assert long_body in out
+    assert "characters truncated" not in out
+
+
+def test_load_chat_uncaps_turn_count_where_fork_truncates(fake_provider):
+    """Contrast on the same data: fork_chat drops the middle turns per
+    MAX_TURNS; load_chat returns every one of them."""
+    messages = []
+    for i in range(60):
+        if i % 2 == 0:
+            messages.append(user(f"turn {i} of the whole story"))
+        else:
+            messages.append(assistant(f"turn {i} answer"))
+    fake_provider.add("conv-1", mtime=time.time() - 10, messages=messages)
+
+    forked = fork_chat("conv-1", providers=[fake_provider])
+    loaded = load_chat("conv-1", providers=[fake_provider])
+
+    assert "turns truncated" in forked
+    assert "turns truncated" not in loaded
+    assert "turn 30 of the whole story" in loaded
+    assert "turn 30 of the whole story" not in forked

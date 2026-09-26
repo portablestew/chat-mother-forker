@@ -21,7 +21,7 @@ def default_providers() -> list[ChatProvider]:
     MCP server and library callers want by default.
 
     Returns a new list of new provider instances on each call, so callers
-    (e.g. backseat-harness) can hold, filter, or mutate the list without
+    can hold, filter, or mutate the list without
     affecting anyone else. Pass the result (or a subset) to
     `search_conversations`, `find_chats`, `render_fork`/`fork_chat`.
     """
