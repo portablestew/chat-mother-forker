@@ -15,8 +15,8 @@ from dataclasses import dataclass
 from chat_mother_forker.models import Conversation, Message, Role
 from chat_mother_forker.truncate import (
     MAX_TURN_CHARS,
-    MAX_TURN_CHARS_SINGLE_MESSAGE,
-    MAX_TURN_TAIL_CHARS_SINGLE_MESSAGE,
+    MAX_TURN_CHARS_FINAL_ANSWER,
+    MAX_TURN_TAIL_CHARS_FINAL_ANSWER,
     MAX_TURNS,
     MAX_USER_TURN_CHARS,
     truncate_middle_list,
@@ -77,6 +77,17 @@ def _sub_label(message: Message) -> str:
     return label
 
 
+def _ends_with_final_answer(rendered: list[Message]) -> bool:
+    """Whether a turn's last rendered message is assistant prose.
+
+    True for a lone long reply and for an agentic run of tool calls that
+    concludes with a written answer -- both end on the conclusion. False when
+    the turn trails off into a tool call or tool result, where neither end is
+    the assistant wrapping up.
+    """
+    return bool(rendered) and rendered[-1].role is Role.ASSISTANT
+
+
 def render_turn(turn: Turn, max_chars: int | None = None, *, truncate: bool = True) -> str:
     """Render a turn's body, middle-truncated to a character budget.
 
@@ -85,10 +96,12 @@ def render_turn(turn: Turn, max_chars: int | None = None, *, truncate: bool = Tr
     chosen per turn:
 
     - User turns get a smaller total budget (`MAX_USER_TURN_CHARS`).
-    - A single-message assistant turn (e.g. one long assistant reply with no
-      tool calls) gets a bigger tail than head, since the conclusion at the
-      end tends to be the most useful context to preserve.
-    - Any other assistant turn gets the general `MAX_TURN_CHARS` split evenly.
+    - An assistant turn whose last rendered message is a final assistant
+      message gets a bigger tail than head, since the conclusion at the end
+      tends to be the most useful context to preserve. This covers both a
+      single long reply and a run of tool calls ending in a written answer.
+    - Any other assistant turn (one trailing a tool call or tool result) gets
+      the general `MAX_TURN_CHARS` split evenly.
 
     With `truncate=False`, the body is returned verbatim -- no cap, no
     middle drop. This is the path `load_chat` takes when a caller needs the
@@ -100,8 +113,8 @@ def render_turn(turn: Turn, max_chars: int | None = None, *, truncate: bool = Tr
         return turn.messages[0].text
 
     header = f"## {turn.kind}"
-    sections = [f"{_sub_label(m)}\n{_quote(m.text)}" for m in turn.messages if m.text.strip()]
-    body = "\n\n".join(sections)
+    rendered = [m for m in turn.messages if m.text.strip()]
+    body = "\n\n".join(f"{_sub_label(m)}\n{_quote(m.text)}" for m in rendered)
 
     if not truncate:
         return f"{header}\n{body}"
@@ -110,9 +123,9 @@ def render_turn(turn: Turn, max_chars: int | None = None, *, truncate: bool = Tr
         body = truncate_middle_text(body, max_chars)
     elif turn.kind == USER_TURN:
         body = truncate_middle_text(body, MAX_USER_TURN_CHARS)
-    elif len(sections) == 1:
+    elif _ends_with_final_answer(rendered):
         body = truncate_middle_text(
-            body, MAX_TURN_CHARS_SINGLE_MESSAGE, tail_chars=MAX_TURN_TAIL_CHARS_SINGLE_MESSAGE
+            body, MAX_TURN_CHARS_FINAL_ANSWER, tail_chars=MAX_TURN_TAIL_CHARS_FINAL_ANSWER
         )
     else:
         body = truncate_middle_text(body, MAX_TURN_CHARS)

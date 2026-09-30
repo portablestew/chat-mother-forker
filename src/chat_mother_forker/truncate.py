@@ -12,14 +12,17 @@ from __future__ import annotations
 
 from typing import Sequence, TypeVar
 
-MAX_TURN_CHARS = 4096  # 2048 head + 2048 tail; assistant turns with multiple messages
+MAX_TURN_CHARS = 4096  # 2048 head + 2048 tail; default assistant-turn budget
 MAX_USER_TURN_CHARS = 2048  # user prompts get a smaller total budget than assistant turns
 
-# A single-message assistant turn is where the "juiciest" context tends to
-# live (the actual conclusion), so it gets a bigger tail than a head.
-MAX_TURN_HEAD_CHARS_SINGLE_MESSAGE = 2048
-MAX_TURN_TAIL_CHARS_SINGLE_MESSAGE = 4096
-MAX_TURN_CHARS_SINGLE_MESSAGE = MAX_TURN_HEAD_CHARS_SINGLE_MESSAGE + MAX_TURN_TAIL_CHARS_SINGLE_MESSAGE
+# An assistant turn that ends on a final assistant message -- not a tool call
+# or tool result -- ends on the conclusion, which is the "juiciest" context to
+# preserve, so its tail gets a bigger budget than its head. This is true of a
+# lone long reply just as much as of an agentic run of tool calls that ends
+# with prose; the test is what the turn ends on, not how many messages it has.
+MAX_TURN_HEAD_CHARS_FINAL_ANSWER = 2048
+MAX_TURN_TAIL_CHARS_FINAL_ANSWER = 4096
+MAX_TURN_CHARS_FINAL_ANSWER = MAX_TURN_HEAD_CHARS_FINAL_ANSWER + MAX_TURN_TAIL_CHARS_FINAL_ANSWER
 
 MAX_PREVIEW_CHARS = 128
 MAX_CONTEXT_CHARS = 128
@@ -43,8 +46,9 @@ def truncate_middle_text(text: str, max_chars: int = MAX_TURN_CHARS, tail_chars:
 
     By default the kept head and tail are equal halves of `max_chars`. Pass
     `tail_chars` to keep a larger (or smaller) tail than head -- e.g. for a
-    single-message turn where the tail (the conclusion) is more valuable
-    than an equally-sized head. `head_chars` is then `max_chars - tail_chars`.
+    turn ending on a final assistant message, where the tail (the conclusion)
+    is more valuable than an equally-sized head. `head_chars` is then
+    `max_chars - tail_chars`.
     """
     if len(text) <= max_chars:
         return text

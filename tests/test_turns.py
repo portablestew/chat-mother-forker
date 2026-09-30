@@ -1,4 +1,10 @@
 from chat_mother_forker.models import Conversation, ConversationRef, Role
+from chat_mother_forker.truncate import (
+    MAX_TURN_CHARS,
+    MAX_TURN_HEAD_CHARS_FINAL_ANSWER,
+    MAX_TURN_TAIL_CHARS_FINAL_ANSWER,
+    MAX_USER_TURN_CHARS,
+)
 from chat_mother_forker.turns import (
     ASSISTANT_TURN,
     USER_TURN,
@@ -11,6 +17,23 @@ from conftest import assistant, tool_call, tool_result, user
 
 def _ref():
     return ConversationRef(provider="fake", conversation_id="c1", locator="c1", mtime=0.0)
+
+
+# "Z" never appears in a header or sub-label, so counting it measures exactly
+# how much of a run of Z's survived truncation.
+_TAIL = "Z" * 20_000
+
+
+def _kept_tail(messages):
+    """Chars of a trailing Z-run kept *after* the truncation marker.
+
+    Only the post-marker segment counts -- the kept head also overlaps the
+    Z-run, so a plain count over the whole turn would blur the two.
+    """
+    rendered = render_turn(group_into_turns(messages)[0])
+    _, _, after = rendered.partition("characters truncated]")
+    assert after, "expected the turn to have been truncated"
+    return after.count("Z")
 
 
 def test_group_into_turns_single_message_each_side():
@@ -92,6 +115,60 @@ def test_render_turn_applies_char_limit_to_whole_body():
     # breaks rendering -- the body under the header should still be capped.
     body = out.split("\n", 1)[1]
     assert len(body) < 500
+
+
+def test_render_turn_lone_assistant_reply_gets_bigger_tail_than_head():
+    """A single long assistant reply is all conclusion, so the tail gets the
+    larger share."""
+    assert _kept_tail([assistant(_TAIL)]) == MAX_TURN_TAIL_CHARS_FINAL_ANSWER
+    assert _kept_tail([assistant(_TAIL)]) > MAX_TURN_HEAD_CHARS_FINAL_ANSWER
+
+
+def test_render_turn_final_answer_after_tool_calls_gets_bigger_tail():
+    """The tail bias keys on *ending* on a final assistant message, not on the
+    turn being a single message -- an agentic turn that concludes with prose
+    preserves just as much of that conclusion as a lone reply does."""
+    messages = [
+        assistant("Let me look. " + "a" * 4000),
+        tool_call("bash", "pytest"),
+        tool_result("1 failed"),
+        assistant(_TAIL),
+    ]
+    out = render_turn(group_into_turns(messages)[0])
+    assert _kept_tail(messages) == MAX_TURN_TAIL_CHARS_FINAL_ANSWER
+    # The tool chatter in the middle is what gets dropped, not the answer.
+    assert "pytest" not in out
+    assert "1 failed" not in out
+    assert out.startswith(f"## {ASSISTANT_TURN}\nASSISTANT\n> Let me look.")
+
+
+def test_render_turn_ending_in_tool_result_splits_evenly():
+    """A turn trailing a tool call/result never reaches a written conclusion,
+    so it keeps the general symmetric head/tail split."""
+    messages = [assistant("Working on it."), tool_call("bash", "pytest"), tool_result(_TAIL)]
+    assert _kept_tail(messages) == MAX_TURN_CHARS // 2
+
+
+def test_render_turn_trailing_blank_assistant_is_not_a_final_answer():
+    """A blank assistant message renders to nothing, so it can't be the thing
+    the turn concludes on."""
+    messages = [assistant("Working on it."), tool_result(_TAIL), assistant("")]
+    assert _kept_tail(messages) == MAX_TURN_CHARS // 2
+
+
+def test_render_turn_short_final_answer_is_left_intact():
+    """The tail bias only shows up once the turn exceeds its budget; a turn
+    that fits is returned whole."""
+    messages = [assistant("a" * 3000), tool_call("bash", "ls"), tool_result("b" * 3000), assistant("All good.")]
+    out = render_turn(group_into_turns(messages)[0])
+    assert "characters truncated" not in out
+    assert "All good." in out
+
+
+def test_render_turn_user_turn_unaffected_by_final_answer_budget():
+    """The tail bias is an assistant-turn rule; user turns keep their own
+    smaller symmetric budget."""
+    assert _kept_tail([user(_TAIL)]) == MAX_USER_TURN_CHARS // 2
 
 
 def test_render_turn_skips_messages_with_blank_text():
