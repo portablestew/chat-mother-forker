@@ -515,3 +515,484 @@ def test_conversation_size_zero_when_db_missing(tmp_path):
         provider="opencode", conversation_id="ses_x", locator="ses_x", mtime=0.0
     )
     assert provider.conversation_size(ref) == 0
+
+
+# --- OpenCode 2.x (session_v2 / session_message) schema ---
+#
+# 2.x mirrors legacy sessions into these tables and appends new ones, so the
+# provider prefers them and only falls back to the legacy tables above when
+# they are absent.
+
+
+def _make_v2_db(tmp_path, rows):
+    """Create a minimal 2.x opencode.db with the given session_v2/session_message rows.
+
+    `rows` is a list of (table, values) tuples where values is a list of row
+    dicts. Only the columns the provider actually reads are declared.
+    """
+    db = tmp_path / "opencode.db"
+    conn = sqlite3.connect(str(db))
+    c = conn.cursor()
+    c.execute(
+        "CREATE TABLE session_v2 ("
+        "id TEXT PRIMARY KEY, project_id TEXT NOT NULL, slug TEXT NOT NULL, "
+        "directory TEXT NOT NULL, title TEXT, version TEXT NOT NULL, "
+        "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL)"
+    )
+    c.execute(
+        "CREATE TABLE session_message ("
+        "id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, "
+        "seq INTEGER NOT NULL, time_created INTEGER NOT NULL, "
+        "time_updated INTEGER NOT NULL, data TEXT NOT NULL)"
+    )
+    for table, values in rows:
+        for v in values:
+            cols = ", ".join(v.keys())
+            placeholders = ", ".join("?" for _ in v)
+            c.execute(
+                f"INSERT INTO {table} ({cols}) VALUES ({placeholders})",
+                list(v.values()),
+            )
+    conn.commit()
+    conn.close()
+    return db
+
+
+def _v2_session(sid, directory="C:/Dev/github/proj", time_updated=1790000000000):
+    return {
+        "id": sid,
+        "project_id": "p1",
+        "slug": "slug-" + sid,
+        "directory": directory,
+        "title": "T",
+        "version": "2.0.32",
+        "time_created": time_updated - 1000,
+        "time_updated": time_updated,
+    }
+
+
+def _v2_message(mid, session_id, type, seq, data, time_created=None):
+    return {
+        "id": mid,
+        "session_id": session_id,
+        "type": type,
+        "seq": seq,
+        "time_created": time_created if time_created is not None else 1000 + seq,
+        "time_updated": time_created if time_created is not None else 1000 + seq,
+        "data": json.dumps(data),
+    }
+
+
+def _v2_user(seq, text):
+    return {"type": "user", "time": {"created": 1000 + seq}, "text": text, "files": []}
+
+
+def _v2_assistant(seq, content):
+    return {
+        "type": "assistant",
+        "time": {"created": 1000 + seq},
+        "content": content,
+    }
+
+
+def test_v2_list_candidates_sorted_by_mtime(tmp_path):
+    db = _make_v2_db(
+        tmp_path,
+        [
+            (
+                "session_v2",
+                [
+                    _v2_session("ses_old", time_updated=1000000),
+                    _v2_session("ses_new", time_updated=2000000),
+                ],
+            )
+        ],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    refs = list(provider.list_candidates())
+
+    assert [r.conversation_id for r in refs] == ["ses_new", "ses_old"]
+    assert refs[0].mtime == 2000.0
+    assert refs[1].locator == "ses_old"
+
+
+def test_v2_preferred_when_both_schemas_present(tmp_path):
+    """A 2.x DB has both schemas; v2 must win, so a session present only in
+    session_v2 is still discovered (legacy alone would miss it)."""
+    db = _make_v2_db(
+        tmp_path,
+        [
+            ("session_v2", [_v2_session("ses_v2_only", time_updated=3000000)]),
+            ("session_message", [_v2_message("sm_1", "ses_v2_only", "user", 1, _v2_user(1, "hi"))]),
+        ],
+    )
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE session ("
+        "id TEXT PRIMARY KEY, project_id TEXT NOT NULL, slug TEXT NOT NULL, "
+        "directory TEXT NOT NULL, title TEXT NOT NULL, version TEXT NOT NULL, "
+        "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE message ("
+        "id TEXT PRIMARY KEY, session_id TEXT NOT NULL, "
+        "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE part ("
+        "id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, "
+        "time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    provider = OpenCodeProvider(db_path=db)
+    refs = list(provider.list_candidates())
+    assert [r.conversation_id for r in refs] == ["ses_v2_only"]
+
+
+def test_v2_load_parses_user_and_assistant_text(tmp_path):
+    sid = "ses_1"
+    db = _make_v2_db(
+        tmp_path,
+        [
+            ("session_v2", [_v2_session(sid)]),
+            (
+                "session_message",
+                [
+                    _v2_message("sm_1", sid, "user", 1, _v2_user(1, "Hello!")),
+                    _v2_message(
+                        "sm_2",
+                        sid,
+                        "assistant",
+                        2,
+                        _v2_assistant(2, [{"type": "text", "text": "Hi there"}]),
+                    ),
+                ],
+            ),
+        ],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+    conv = provider.load(ref)
+
+    assert [m.role for m in conv.messages] == [Role.USER, Role.ASSISTANT]
+    assert [m.text for m in conv.messages] == ["Hello!", "Hi there"]
+    assert conv.project == "proj"
+
+
+def test_v2_load_skips_reasoning_and_bookkeeping_types(tmp_path):
+    sid = "ses_1"
+    db = _make_v2_db(
+        tmp_path,
+        [
+            ("session_v2", [_v2_session(sid)]),
+            (
+                "session_message",
+                [
+                    _v2_message("sm_0", sid, "system", 1, {"text": "tools changed"}),
+                    _v2_message("sm_1", sid, "user", 2, _v2_user(2, "go")),
+                    _v2_message(
+                        "sm_2",
+                        sid,
+                        "assistant",
+                        3,
+                        _v2_assistant(
+                            3,
+                            [
+                                {"type": "reasoning", "text": "thinking"},
+                                {"type": "text", "text": "done"},
+                            ],
+                        ),
+                    ),
+                    _v2_message("sm_3", sid, "synthetic", 4, {"text": "continue?"}),
+                    _v2_message("sm_4", sid, "idle", 5, {"outcome": "succeeded"}),
+                ],
+            ),
+        ],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+    conv = provider.load(ref)
+
+    assert [m.text for m in conv.messages] == ["go", "done"]
+
+
+def test_v2_load_parses_tool_call_and_result(tmp_path):
+    sid = "ses_1"
+    db = _make_v2_db(
+        tmp_path,
+        [
+            ("session_v2", [_v2_session(sid)]),
+            (
+                "session_message",
+                [
+                    _v2_message("sm_1", sid, "user", 1, _v2_user(1, "run it")),
+                    _v2_message(
+                        "sm_2",
+                        sid,
+                        "assistant",
+                        2,
+                        _v2_assistant(
+                            2,
+                            [
+                                {
+                                    "type": "tool",
+                                    "id": "call_abc",
+                                    "name": "bash",
+                                    "state": {
+                                        "status": "completed",
+                                        "input": {"command": "ls -la"},
+                                        "content": [
+                                            {"type": "text", "text": "file1.txt\nfile2.txt"}
+                                        ],
+                                        "metadata": {"truncated": False},
+                                    },
+                                }
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+        ],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+    conv = provider.load(ref)
+
+    tool_calls = [m for m in conv.messages if m.role is Role.TOOL_CALL]
+    assert len(tool_calls) == 1
+    assert tool_calls[0].label == "bash"
+    assert "ls -la" in tool_calls[0].text
+
+    tool_results = [m for m in conv.messages if m.role is Role.TOOL_RESULT]
+    assert len(tool_results) == 1
+    assert "file1.txt" in tool_results[0].text
+
+
+def test_v2_load_parses_error_tool_result(tmp_path):
+    sid = "ses_1"
+    db = _make_v2_db(
+        tmp_path,
+        [
+            ("session_v2", [_v2_session(sid)]),
+            (
+                "session_message",
+                [
+                    _v2_message("sm_1", sid, "user", 1, _v2_user(1, "go")),
+                    _v2_message(
+                        "sm_2",
+                        sid,
+                        "assistant",
+                        2,
+                        _v2_assistant(
+                            2,
+                            [
+                                {
+                                    "type": "tool",
+                                    "id": "call_err",
+                                    "name": "bash",
+                                    "state": {
+                                        "status": "error",
+                                        "input": {"command": "rm -rf /"},
+                                        "error": {"type": "tool.execution", "message": "denied"},
+                                    },
+                                }
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+        ],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+    conv = provider.load(ref)
+
+    tool_results = [m for m in conv.messages if m.role is Role.TOOL_RESULT]
+    assert len(tool_results) == 1
+    assert tool_results[0].text == "denied"
+
+
+def test_v2_tool_call_without_result_yields_only_call(tmp_path):
+    sid = "ses_1"
+    db = _make_v2_db(
+        tmp_path,
+        [
+            ("session_v2", [_v2_session(sid)]),
+            (
+                "session_message",
+                [
+                    _v2_message("sm_1", sid, "user", 1, _v2_user(1, "go")),
+                    _v2_message(
+                        "sm_2",
+                        sid,
+                        "assistant",
+                        2,
+                        _v2_assistant(
+                            2,
+                            [
+                                {
+                                    "type": "tool",
+                                    "id": "call_run",
+                                    "name": "bash",
+                                    "state": {"status": "running", "input": {"command": "sleep 1"}},
+                                }
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+        ],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+    conv = provider.load(ref)
+
+    assert [m.role for m in conv.messages] == [Role.USER, Role.TOOL_CALL]
+
+
+def test_v2_load_skips_malformed_json(tmp_path):
+    sid = "ses_1"
+    rows = [
+        _v2_message("sm_1", sid, "user", 1, _v2_user(1, "ok")),
+        {
+            "id": "sm_bad",
+            "session_id": sid,
+            "type": "assistant",
+            "seq": 2,
+            "time_created": 1002,
+            "time_updated": 1002,
+            "data": "{not json",
+        },
+    ]
+    db = _make_v2_db(tmp_path, [("session_v2", [_v2_session(sid)]), ("session_message", rows)])
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+    conv = provider.load(ref)
+
+    assert [m.text for m in conv.messages] == ["ok"]
+
+
+def test_v2_checkpoint_discovery_through_tool_result(tmp_path):
+    uuid = "27ebccde-2451-45c6-91b2-acc9156ef44e"
+    checkpoint_text = f"CHAT CHECKPOINT UUID={uuid} SLUG=my-slug"
+    sid = "ses_1"
+    db = _make_v2_db(
+        tmp_path,
+        [
+            ("session_v2", [_v2_session(sid)]),
+            (
+                "session_message",
+                [
+                    _v2_message("sm_1", sid, "user", 1, _v2_user(1, "checkpoint please")),
+                    _v2_message(
+                        "sm_2",
+                        sid,
+                        "assistant",
+                        2,
+                        _v2_assistant(
+                            2,
+                            [
+                                {
+                                    "type": "tool",
+                                    "id": "call_cp",
+                                    "name": "chat-mother-forker_chat_checkpoint",
+                                    "state": {
+                                        "status": "completed",
+                                        "input": {"slug": "my-slug"},
+                                        "content": [{"type": "text", "text": checkpoint_text}],
+                                    },
+                                }
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+        ],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+    conv = provider.load(ref)
+
+    checkpoints = find_checkpoints(conv)
+    assert len(checkpoints) == 1
+    assert checkpoints[0].uuid == uuid
+    assert checkpoints[0].slug == "my-slug"
+
+
+def test_v2_conversation_size_sums_session_message_bytes(tmp_path):
+    sid = "ses_1"
+    msg_rows = [
+        _v2_message("sm_1", sid, "user", 1, _v2_user(1, "hello there")),
+        _v2_message("sm_2", sid, "assistant", 2, _v2_assistant(2, [{"type": "text", "text": "hi back"}])),
+    ]
+    db = _make_v2_db(tmp_path, [("session_v2", [_v2_session(sid)]), ("session_message", msg_rows)])
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+
+    expected = sum(len(r["data"].encode("utf-8")) for r in msg_rows)
+    assert provider.conversation_size(ref) == expected
+    assert provider.conversation_size(ref) > 0
+
+
+def test_v2_conversation_metadata_returns_db_path_and_session(tmp_path):
+    sid = "ses_1"
+    db = _make_v2_db(
+        tmp_path,
+        [
+            ("session_v2", [_v2_session(sid)]),
+            ("session_message", [_v2_message("sm_1", sid, "user", 1, _v2_user(1, "hi"))]),
+        ],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+    database, session_id = provider.conversation_metadata(ref)
+
+    assert database == str(db)
+    assert session_id == sid
+
+
+def test_v2_project_is_none_when_directory_empty(tmp_path):
+    sid = "ses_1"
+    db = _make_v2_db(
+        tmp_path,
+        [
+            ("session_v2", [_v2_session(sid, directory="")]),
+            ("session_message", [_v2_message("sm_1", sid, "user", 1, _v2_user(1, "hi"))]),
+        ],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+    conv = provider.load(ref)
+
+    assert conv.project is None
+
+
+def test_v2_load_trims_before_first_user(tmp_path):
+    sid = "ses_1"
+    db = _make_v2_db(
+        tmp_path,
+        [
+            ("session_v2", [_v2_session(sid)]),
+            (
+                "session_message",
+                [
+                    _v2_message(
+                        "sm_1",
+                        sid,
+                        "assistant",
+                        1,
+                        _v2_assistant(1, [{"type": "text", "text": "system ack"}]),
+                    ),
+                    _v2_message("sm_2", sid, "user", 2, _v2_user(2, "first user")),
+                ],
+            ),
+        ],
+    )
+    provider = OpenCodeProvider(db_path=db)
+    ref = next(iter(provider.list_candidates()))
+    conv = provider.load(ref)
+
+    assert conv.messages[0].role is Role.USER
+    assert conv.messages[0].text == "first user"

@@ -29,7 +29,7 @@ from chat_mother_forker.checkpoint import Checkpoint
 from chat_mother_forker.providers import default_providers
 from chat_mother_forker.providers.base import ChatProvider
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 __all__ = [
     "__version__",
