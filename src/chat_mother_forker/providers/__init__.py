@@ -9,6 +9,7 @@ from __future__ import annotations
 from chat_mother_forker.providers.base import ChatProvider
 from chat_mother_forker.providers.claude_code import ClaudeCodeProvider
 from chat_mother_forker.providers.cline import ClineProvider
+from chat_mother_forker.providers.commandcode import CommandCodeProvider
 from chat_mother_forker.providers.kilo import KiloProvider
 from chat_mother_forker.providers.kiro_cli import KiroCliProvider
 from chat_mother_forker.providers.kiro_ide import KiroIdeProvider
@@ -45,6 +46,9 @@ def default_providers() -> list[ChatProvider]:
         # SQLite DB: push the recency cut into SQL (exact -- same ordering key
         # callers use) so list_candidates never materializes every session row.
         OpenCodeProvider(max_sessions=CANDIDATES_PER_PROVIDER),
+        # File-backed JSONL under ~/.commandcode/projects, one file per session,
+        # so there is no DB-style recency cap to apply here.
+        CommandCodeProvider(),
     ]
 
 

@@ -9,5 +9,9 @@ build/
 .ruff_cache/
 .pyddock/
 .kiro/
+.backseat/
+.commandcode/
+.kilo/
+.opencode/
 .mcp.json
 .claude/settings.local.json

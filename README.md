@@ -111,7 +111,7 @@ capped — when over the limit, the **middle** is dropped in favor of a
 
 ## Status
 
-Seven providers are implemented, one per tool:
+Eight providers are implemented, one per tool:
 
 - **`kiro_cli`** — Kiro CLI (`~/.kiro/sessions/cli/*.jsonl`)
 - **`kiro_ide`** — Kiro IDE (execution logs under the extension's
@@ -123,6 +123,7 @@ Seven providers are implemented, one per tool:
 - **`cline`** — Cline (`~/.cline/sessions/<slug>/`)
 - **`kilo`** — Kilo Code (SQLite `~/.local/share/kilo/kilo.db`)
 - **`opencode`** — OpenCode (SQLite `~/.local/share/opencode/opencode.db`)
+- **`command_code`** — Command Code (`~/.commandcode/projects/<cwd>/<uuid>.jsonl`)
 
 ## License
 
